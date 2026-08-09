@@ -1,5 +1,109 @@
 # Overleaf Whiteboard Development Guide
 
+## Using the App — No Coding Required
+
+This section is for someone who just wants to **use the customized Overleaf app normally**. You do not need to know Git, Docker, WSL, or programming for the steps below.
+
+### 1. Start Overleaf
+
+On Windows, open the existing launcher:
+
+`C:\Users\ryupr\AppData\Local\OverleafLauncher\launch-overleaf.vbs`
+
+After it starts, open your web browser and go to:
+
+`http://localhost/project`
+
+That is your local Overleaf website.
+
+### 2. Open or create a project
+
+Use Overleaf like a normal document editor:
+
+1. Open an existing project, or create a new one.
+2. Use `.tex` files for normal LaTeX writing.
+3. Click **Recompile** to update the PDF preview.
+4. Your files and project stay inside your local Overleaf installation.
+
+You do not need to open a terminal just to write documents or use the whiteboard.
+
+### 3. Create a whiteboard
+
+Inside a project:
+
+1. Create a new file.
+2. Give it a name ending in `.tldraw`, for example `notes.tldraw` or `diagram.tldraw`.
+3. Click the new `.tldraw` file in the file list.
+4. Overleaf will open the drawing canvas instead of the normal text editor.
+
+The `.tldraw` ending is what tells this customized Overleaf to treat the file as a whiteboard.
+
+### 4. Use the whiteboard
+
+You can use it like a normal drawing/whiteboard app. For example, you can:
+
+- draw freehand
+- add shapes
+- add text
+- move and resize objects
+- select and delete objects
+- zoom and pan around the canvas
+- switch between the whiteboard and your normal `.tex` files
+
+You should not need to manually save the whiteboard. Changes are stored through Overleaf as you work.
+
+### 5. Come back to a whiteboard later
+
+Just open the same project and click the same `.tldraw` file again. The saved drawing should load back onto the canvas.
+
+You can also switch to another file and return to the whiteboard without losing your work.
+
+### 6. Use the whiteboard together with LaTeX
+
+A simple way to use this project is:
+
+1. Write your paper, homework, notes, or report in normal `.tex` files.
+2. Keep diagrams, brainstorming, rough sketches, and planning in one or more `.tldraw` files in the same project.
+3. Switch between the document and whiteboard from the file list on the left.
+
+The whiteboard does not replace LaTeX; it is an extra file type inside the same Overleaf project.
+
+### 7. If the app does not open
+
+First try these simple steps:
+
+1. Make sure the launcher was opened.
+2. Wait until the local Overleaf services have started.
+3. Refresh `http://localhost/project` in your browser.
+4. If it still does not work, ask an AI coding assistant to check the local Overleaf services for you.
+
+You can say:
+
+> My local Overleaf at `http://localhost/project` is not working. Please read `/root/src/overleaf-whiteboard/WHITEBOARD_DEV_GUIDE.md`, check the running services and logs, explain what is wrong in simple language, and do not delete or reset anything unless I approve it.
+
+### 8. If a whiteboard does not open correctly
+
+Do not edit the raw contents of the `.tldraw` file yourself. Instead, ask an AI assistant to inspect the problem.
+
+For example:
+
+> My `.tldraw` whiteboard is not loading correctly in local Overleaf. Please diagnose it without deleting the board or changing its saved data unless necessary.
+
+### 9. Things a normal user does not need to touch
+
+For everyday use, you can ignore:
+
+- Git and GitHub branches
+- Docker commands
+- WSL commands
+- source-code files
+- build commands
+- the internal JSON stored inside `.tldraw` documents
+
+Those are only needed when developing or repairing the app.
+
+---
+
 ## Start Here — Beginner Guide
 
 If you are new to this project, you do **not** need to understand the whole Overleaf codebase before working on the whiteboard. Use this document as your map and follow this order whenever you come back to the project.
