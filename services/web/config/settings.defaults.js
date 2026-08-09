@@ -38,6 +38,7 @@ const defaultTextExtensions = [
   'bibtex',
   'txt',
   'tikz',
+  'tldraw',
   'mtx',
   'rtex',
   'md',

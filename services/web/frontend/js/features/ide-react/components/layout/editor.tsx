@@ -11,6 +11,7 @@ import SymbolPalettePane from '@/features/ide-react/components/editor/symbol-pal
 import { useEditorPropertiesContext } from '@/features/ide-react/context/editor-properties-context'
 import { isSplitTestEnabled } from '@/utils/splitTestUtils'
 import importOverleafModules from '../../../../../macros/import-overleaf-module.macro'
+import TldrawEditor from '@/features/ide-react/components/editor/tldraw-editor'
 
 const [pythonRunnerModule] = importOverleafModules('pythonRunner') as {
   import: { PythonEditorSplit: FC }
@@ -34,6 +35,10 @@ export const Editor = () => {
     openEntity?.type === 'doc' &&
     openEntity.entity.name.toLowerCase().endsWith('.py')
 
+  const isTldrawDocument =
+    openEntity?.type === 'doc' &&
+    openEntity.entity.name.toLowerCase().endsWith('.tldraw')
+
   return (
     <div
       className={classNames('ide-redesign-editor-content', {
@@ -49,16 +54,18 @@ export const Editor = () => {
           order={1}
           className="ide-redesign-editor-panel"
         >
-          {pythonRunnerModule &&
-          isPythonDocument &&
-          isSplitTestEnabled('overleaf-code') ? (
+          {isTldrawDocument ? (
+            <TldrawEditor key={currentDocumentId} />
+          ) : pythonRunnerModule &&
+            isPythonDocument &&
+            isSplitTestEnabled('overleaf-code') ? (
             <pythonRunnerModule.import.PythonEditorSplit />
           ) : (
             <SourceEditor />
           )}
           {isLoading && <EditorLoadingPane />}
         </Panel>
-        {showSymbolPalette && (
+        {showSymbolPalette && !isTldrawDocument && (
           <>
             <VerticalResizeHandle id="ide-redesign-editor-symbol-palette" />
             <Panel
