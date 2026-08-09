@@ -1,5 +1,159 @@
 # Overleaf Whiteboard Development Guide
 
+## Start Here — Beginner Guide
+
+If you are new to this project, you do **not** need to understand the whole Overleaf codebase before working on the whiteboard. Use this document as your map and follow this order whenever you come back to the project.
+
+### 1. Start the local Overleaf
+
+The easiest way on your Windows machine is to use the existing launcher:
+
+`C:\Users\ryupr\AppData\Local\OverleafLauncher\launch-overleaf.vbs`
+
+That launcher starts the Docker-based Overleaf environment inside WSL. After it starts, open:
+
+`http://localhost/project`
+
+If you are working directly inside WSL instead, the equivalent command is:
+
+```bash
+cd /root/overleaf-toolkit
+bin/up -d
+```
+
+You normally do **not** need to rebuild Docker images just to open and use the current whiteboard version.
+
+### 2. Know the two important folders
+
+Most work happens in only these two places:
+
+- `/root/src/overleaf-whiteboard` — the Overleaf source code and whiteboard implementation.
+- `/root/overleaf-toolkit` — the local Docker/runtime setup used to launch your customized Overleaf.
+
+If you ask an AI coding agent to work on the whiteboard, tell it to work from:
+
+`/root/src/overleaf-whiteboard`
+
+and to read this guide before changing anything.
+
+### 3. Check the project before making changes
+
+Before editing code, run or ask the AI agent to run:
+
+```bash
+cd /root/src/overleaf-whiteboard
+git status --short
+git branch --show-current
+git log -5 --oneline --decorate
+git remote -v
+docker ps
+```
+
+The expected development branch is:
+
+`feature/overleaf-whiteboard`
+
+Your writable GitHub remote is named `fork`. The `origin` remote belongs to the main Overleaf project and should normally be treated as read-only.
+
+### 4. Where the whiteboard code lives
+
+For most whiteboard changes, start with these files:
+
+- `services/web/frontend/js/features/ide-react/components/editor/tldraw-editor.tsx` — the actual tldraw whiteboard, persistence, collaboration, and read-only behavior.
+- `services/web/frontend/js/features/ide-react/components/layout/editor.tsx` — decides when Overleaf opens the whiteboard instead of the normal text editor.
+- `services/web/config/settings.defaults.js` — tells Overleaf that `.tldraw` files are editable documents.
+- `services/web/package.json` — contains the tldraw dependencies.
+
+If your change is about drawing behavior, collaboration, persistence, or loading a board, `tldraw-editor.tsx` is usually the first file to inspect.
+
+### 5. How to test your changes
+
+For a simple manual test:
+
+1. Open your local Overleaf project.
+2. Create or open a file ending in `.tldraw`, for example `board.tldraw`.
+3. Draw shapes or text.
+4. Open another file and return to the whiteboard.
+5. Reload the browser and check that the drawing still exists.
+6. If testing collaboration, open the same project in a second browser/session and verify changes appear in both.
+
+If something fails, first check:
+
+```bash
+docker logs --since 10m sharelatex 2>&1 | grep -Ei 'error|exception|fatal|whiteboard|tldraw'
+```
+
+### 6. When you actually need to rebuild
+
+Normal source inspection does not require a rebuild. A production Docker rebuild is mainly needed when you want to test new frontend code in the real deployed local Overleaf image.
+
+The Community image is built from:
+
+```bash
+cd /root/src/overleaf-whiteboard/server-ce
+make build-community
+```
+
+Then rebuild the local no-auth wrapper:
+
+```bash
+cd /root/overleaf-toolkit/local-noauth
+docker build --progress=plain -t local/overleaf-noauth:6.2.2 .
+```
+
+Then restart the local stack:
+
+```bash
+cd /root/overleaf-toolkit
+bin/up -d
+```
+
+The Community build is large and can use a lot of memory, so do not run it unnecessarily.
+
+### 7. How to save your work to GitHub
+
+After changes are tested:
+
+```bash
+cd /root/src/overleaf-whiteboard
+git status
+git diff --check
+git add <files-you-changed>
+git commit -m "Describe the change"
+git push fork feature/overleaf-whiteboard
+```
+
+Do not push to `origin` unless your GitHub permissions change.
+
+### 8. How to ask an AI agent for help
+
+A useful starting prompt is:
+
+> Work on the Overleaf whiteboard project in `/root/src/overleaf-whiteboard`. Read `WHITEBOARD_DEV_GUIDE.md` first. Check git status, the current branch, recent commits, and running Docker containers before changing anything. Preserve unrelated changes. Implement and verify the requested change end to end, and push only if I explicitly ask you to.
+
+You can then add your specific request, for example:
+
+> Add support for inserting LaTeX equations as structured whiteboard objects.
+
+or:
+
+> Investigate why whiteboard changes from a second browser are not appearing immediately. Diagnose first; do not change code until the cause is clear.
+
+### 9. What you should avoid as a beginner
+
+Avoid these unless you specifically know why they are needed:
+
+- Do not run destructive Git commands such as `git reset --hard`.
+- Do not delete Docker volumes or Mongo data just to fix a frontend issue.
+- Do not reinstall or upgrade large dependency trees without a reason.
+- Do not push directly to the upstream `origin` repository.
+- Do not change the `.tldraw` persistence format casually; existing boards depend on it.
+- Do not rebuild the full Community image for every tiny investigation.
+
+If you are unsure, ask the AI agent to **inspect and explain first**, then make the smallest necessary change.
+
+---
+
 This document is the machine-specific technical guide for the local Overleaf whiteboard development environment. It is intended to be useful both to a human developer and to future AI coding agents working on this machine.
 
 ## Project Summary
