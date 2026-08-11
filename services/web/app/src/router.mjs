@@ -31,6 +31,7 @@ import ProjectDownloadsController from './Features/Downloads/ProjectDownloadsCon
 import FileStoreController from './Features/FileStore/FileStoreController.mjs'
 import DocumentUpdaterController from './Features/DocumentUpdater/DocumentUpdaterController.mjs'
 import HistoryRouter from './Features/History/HistoryRouter.mjs'
+import WhiteboardAiRouter from './Features/WhiteboardAi/WhiteboardAiRouter.mjs'
 import ExportsController from './Features/Exports/ExportsController.mjs'
 import PasswordResetRouter from './Features/PasswordReset/PasswordResetRouter.mjs'
 import StaticPagesRouter from './Features/StaticPages/StaticPagesRouter.mjs'
@@ -292,6 +293,7 @@ async function initialize(webRouter, privateApiRouter, publicApiRouter) {
   }
 
   EditorRouter.apply(webRouter, privateApiRouter)
+  WhiteboardAiRouter.apply(webRouter)
   CollaboratorsRouter.apply(webRouter, privateApiRouter)
   SubscriptionRouter.apply(webRouter, privateApiRouter, publicApiRouter)
   UploadsRouter.apply(webRouter, privateApiRouter)

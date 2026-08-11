@@ -1,151 +1,55 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  DocumentRecordType,
   Editor,
-  IndexKey,
-  PageRecordType,
   RecordsDiff,
-  TLDOCUMENT_ID,
-  TLPageId,
   TLRecord,
-  TLStore,
+  TLShapeId,
   Tldraw,
-  createTLStore,
+  createShapeId,
+  isShape,
   squashRecordDiffs,
 } from 'tldraw'
 import { getAssetUrlsByMetaUrl } from '@tldraw/assets/urls'
 import 'tldraw/tldraw.css'
 import { useEditorOpenDocContext } from '@/features/ide-react/context/editor-open-doc-context'
 import { usePermissionsContext } from '@/features/ide-react/context/permissions-context'
+import {
+  createWhiteboardStore,
+  reconcileWhiteboardStore,
+  serializeWhiteboardDiff,
+  serializeWhiteboardSnapshot,
+  shouldCompactWhiteboard,
+} from '@/features/whiteboard/persistence'
+import { WHITEBOARD_SHAPE_UTILS } from '@/features/whiteboard/shapes'
+import {
+  applySceneActions,
+  useWhiteboardEditor,
+  WhiteboardRecordPatch,
+} from '@/features/whiteboard/whiteboard-editor-context'
+import {
+  exportWhiteboardToTikz,
+  importWhiteboardFromTikz,
+  TikzImportItem,
+} from '@/features/whiteboard/tikz'
 
-const TLDRAW_DIFF_FORMAT = 'overleaf-tldraw-diff'
-const TLDRAW_DIFF_VERSION = 1
 const LOCAL_FLUSH_DELAY = 120
-const DEFAULT_PAGE_ID = 'page:page' as TLPageId
 const TLDRAW_ASSET_URLS = getAssetUrlsByMetaUrl()
 
-type PersistedTldrawDiff = {
-  format: typeof TLDRAW_DIFF_FORMAT
-  version: typeof TLDRAW_DIFF_VERSION
-  added: TLRecord[]
-  updated: TLRecord[]
-  removed: string[]
-}
-
-function isPersistedTldrawDiff(value: unknown): value is PersistedTldrawDiff {
-  if (!value || typeof value !== 'object') {
-    return false
-  }
-
-  const candidate = value as Partial<PersistedTldrawDiff>
-  return (
-    candidate.format === TLDRAW_DIFF_FORMAT &&
-    candidate.version === TLDRAW_DIFF_VERSION &&
-    Array.isArray(candidate.added) &&
-    Array.isArray(candidate.updated) &&
-    Array.isArray(candidate.removed)
-  )
-}
-
-function parseDiffLog(snapshot: string): PersistedTldrawDiff[] {
-  const diffs: PersistedTldrawDiff[] = []
-
-  for (const [index, line] of snapshot.split('\n').entries()) {
-    if (!line.trim()) {
-      continue
-    }
-
-    let value: unknown
-    try {
-      value = JSON.parse(line)
-    } catch {
-      throw new Error(`Invalid whiteboard data on line ${index + 1}`)
-    }
-
-    if (!isPersistedTldrawDiff(value)) {
-      throw new Error(`Unsupported whiteboard data on line ${index + 1}`)
-    }
-
-    diffs.push(value)
-  }
-
-  return diffs
-}
-
-function putPersistedDiff(store: TLStore, diff: PersistedTldrawDiff) {
-  const records = [...diff.added, ...diff.updated]
-  if (records.length > 0) {
-    store.put(records)
-  }
-  if (diff.removed.length > 0) {
-    store.remove(diff.removed as TLRecord['id'][])
-  }
-}
-
-function createDocumentRecords(snapshot: string): TLRecord[] {
-  const diffs = parseDiffLog(snapshot)
-  const validationStore = createTLStore()
-
-  validationStore.mergeRemoteChanges(() => {
-    validationStore.put([
-      DocumentRecordType.create({ id: TLDOCUMENT_ID, name: '' }),
-      PageRecordType.create({
-        id: DEFAULT_PAGE_ID,
-        name: 'Page 1',
-        index: 'a1' as IndexKey,
-        meta: {},
-      }),
-    ])
-
-    for (const diff of diffs) {
-      putPersistedDiff(validationStore, diff)
-    }
-  })
-
-  return Object.values(validationStore.serialize('document'))
-}
-
-function reconcileStore(store: TLStore, snapshot: string) {
-  const documentRecords = createDocumentRecords(snapshot)
-  const existingDocumentIds = Object.keys(store.serialize('document')) as TLRecord['id'][]
-
-  store.mergeRemoteChanges(() => {
-    if (existingDocumentIds.length > 0) {
-      store.remove(existingDocumentIds)
-    }
-    store.put(documentRecords)
-  })
-}
-
-function serializeDiff(diff: RecordsDiff<TLRecord>): string | null {
-  const added = Object.values(diff.added)
-  const updated = Object.values(diff.updated).map(([, record]) => record)
-  const removed = Object.keys(diff.removed)
-
-  if (added.length === 0 && updated.length === 0 && removed.length === 0) {
-    return null
-  }
-
-  const persistedDiff: PersistedTldrawDiff = {
-    format: TLDRAW_DIFF_FORMAT,
-    version: TLDRAW_DIFF_VERSION,
-    added,
-    updated,
-    removed,
-  }
-
-  return `${JSON.stringify(persistedDiff)}\n`
-}
-
 export default function TldrawEditor() {
-  const { currentDocument } = useEditorOpenDocContext()
+  const { currentDocument, currentDocumentId } = useEditorOpenDocContext()
   const { write } = usePermissionsContext()
-  const store = useMemo(() => createTLStore(), [])
+  const { registerBoard } = useWhiteboardEditor()
+  const store = useMemo(() => createWhiteboardStore(), [])
   const [editor, setEditor] = useState<Editor | null>(null)
   const [syncError, setSyncError] = useState<string | null>(null)
+  const [previewTransactionId, setPreviewTransactionId] = useState<
+    string | null
+  >(null)
   const pendingDiffs = useRef<RecordsDiff<TLRecord>[]>([])
   const flushTimer = useRef<number | null>(null)
   const writeRef = useRef(write)
+  const activeTransactionId = useRef<string | null>(null)
+  const previewPatch = useRef<WhiteboardRecordPatch[]>([])
 
   writeRef.current = write
 
@@ -169,21 +73,127 @@ export default function TldrawEditor() {
 
     const diff = squashRecordDiffs(pendingDiffs.current)
     pendingDiffs.current = []
-    const line = serializeDiff(diff)
+    const line = serializeWhiteboardDiff(diff, {
+      source: activeTransactionId.current ? 'ai' : 'user',
+      transactionId: activeTransactionId.current ?? undefined,
+    })
     if (!line) {
       return
     }
 
     const snapshot = currentDocument.getSnapshot() ?? ''
-    currentDocument.submitOp({ p: snapshot.length, i: line })
-  }, [clearFlushTimer, currentDocument])
+    if (shouldCompactWhiteboard(`${snapshot}${line}`)) {
+      currentDocument.submitOp({
+        p: 0,
+        d: snapshot,
+        i: serializeWhiteboardSnapshot(store),
+      })
+    } else {
+      currentDocument.submitOp({ p: snapshot.length, i: line })
+    }
+  }, [clearFlushTimer, currentDocument, store])
+
+  useEffect(() => {
+    if (!editor || !currentDocumentId) return
+    const clearPreview = () => {
+      if (previewPatch.current.length === 0) return
+      store.mergeRemoteChanges(() => {
+        restoreRecordPatch(editor, previewPatch.current, false)
+      })
+      previewPatch.current = []
+      setPreviewTransactionId(null)
+    }
+    return registerBoard({
+      boardId: currentDocumentId,
+      editor,
+      apply(actions, transactionId) {
+        clearPreview()
+        flushPendingDiffs()
+        const before = new Map(
+          editor.getCurrentPageShapes().map(shape => [shape.id, shape])
+        )
+        activeTransactionId.current = transactionId
+        try {
+          applySceneActions(editor, actions, {
+            historyMark: `AI transaction ${transactionId}`,
+          })
+          flushPendingDiffs()
+          const after = new Map(
+            editor.getCurrentPageShapes().map(shape => [shape.id, shape])
+          )
+          return createRecordPatch(before, after)
+        } finally {
+          activeTransactionId.current = null
+        }
+      },
+      preview(actions, transactionId) {
+        clearPreview()
+        const before = new Map(
+          editor.getCurrentPageShapes().map(shape => [shape.id, shape])
+        )
+        store.mergeRemoteChanges(() => {
+          applySceneActions(editor, actions, {
+            historyMark: `AI draft ${transactionId}`,
+          })
+        })
+        const after = new Map(
+          editor.getCurrentPageShapes().map(shape => [shape.id, shape])
+        )
+        previewPatch.current = createRecordPatch(before, after)
+        setPreviewTransactionId(transactionId)
+      },
+      clearPreview,
+      exportTikz() {
+        clearPreview()
+        return exportWhiteboardToTikz({
+          boardId: currentDocumentId,
+          records: Object.values(store.serialize('document')),
+        })
+      },
+      importTikz(source) {
+        clearPreview()
+        const result = importWhiteboardFromTikz(source)
+        flushPendingDiffs()
+        activeTransactionId.current = `import:${crypto.randomUUID()}`
+        try {
+          const currentShapeIds = editor.getCurrentPageShapeIds()
+          if (currentShapeIds.size > 0) {
+            editor.deleteShapes([...currentShapeIds])
+          }
+          if (result.kind === 'round-trip') {
+            const shapes = result.records.filter(isShape)
+            if (shapes.length > 0) editor.store.put(shapes)
+          } else {
+            applySceneActions(editor, result.items.map(tikzItemToAction), {
+              historyMark: 'Import TikZ',
+            })
+          }
+          flushPendingDiffs()
+        } finally {
+          activeTransactionId.current = null
+        }
+        return result.warnings
+      },
+      canUndo(patch) {
+        validateRecordPatch(editor, patch)
+      },
+      undo(patch, transactionId) {
+        clearPreview()
+        flushPendingDiffs()
+        activeTransactionId.current = `undo:${transactionId}`
+        try {
+          restoreRecordPatch(editor, patch)
+          flushPendingDiffs()
+        } finally {
+          activeTransactionId.current = null
+        }
+      },
+    })
+  }, [currentDocumentId, editor, flushPendingDiffs, registerBoard, store])
 
   const scheduleFlush = useCallback(() => {
     clearFlushTimer()
-    flushTimer.current = window.setTimeout(
-      flushPendingDiffs,
-      LOCAL_FLUSH_DELAY
-    )
+    flushTimer.current = window.setTimeout(flushPendingDiffs, LOCAL_FLUSH_DELAY)
   }, [clearFlushTimer, flushPendingDiffs])
 
   useEffect(() => {
@@ -201,12 +211,14 @@ export default function TldrawEditor() {
 
     const syncFromDocument = () => {
       try {
-        reconcileStore(store, currentDocument.getSnapshot() ?? '')
+        reconcileWhiteboardStore(store, currentDocument.getSnapshot() ?? '')
         setSyncError(null)
         editor.updateInstanceState({ isReadonly: !write })
       } catch (error) {
         const message =
-          error instanceof Error ? error.message : 'Unable to load whiteboard data'
+          error instanceof Error
+            ? error.message
+            : 'Unable to load whiteboard data'
         setSyncError(message)
         editor.updateInstanceState({ isReadonly: true })
       }
@@ -226,6 +238,8 @@ export default function TldrawEditor() {
       // Persist any local changes first so canonical replay cannot erase edits
       // that are still waiting in the short batching window.
       flushPendingDiffs()
+      previewPatch.current = []
+      setPreviewTransactionId(null)
       syncFromDocument()
     }
 
@@ -234,6 +248,7 @@ export default function TldrawEditor() {
     return () => {
       stopListening()
       currentDocument.off('remoteop.tldraw', onRemoteOp)
+      previewPatch.current = []
       flushPendingDiffs()
       clearFlushTimer()
     }
@@ -251,6 +266,7 @@ export default function TldrawEditor() {
     <div style={{ position: 'absolute', inset: 0 }}>
       <Tldraw
         assetUrls={TLDRAW_ASSET_URLS}
+        shapeUtils={WHITEBOARD_SHAPE_UTILS}
         store={store}
         onMount={mountedEditor => {
           setEditor(mountedEditor)
@@ -276,6 +292,131 @@ export default function TldrawEditor() {
           Whiteboard is read-only: {syncError}
         </div>
       )}
+      {previewTransactionId && (
+        <div
+          role="status"
+          style={{
+            position: 'absolute',
+            top: 12,
+            right: 12,
+            zIndex: 1000,
+            padding: '8px 12px',
+            borderRadius: 4,
+            background: '#fff7d6',
+            color: '#553f00',
+            boxShadow: '0 2px 8px rgb(0 0 0 / 20%)',
+          }}
+        >
+          AI draft preview — not saved
+        </div>
+      )}
     </div>
   )
+}
+
+function createRecordPatch(
+  before: Map<string, TLRecord>,
+  after: Map<string, TLRecord>
+): WhiteboardRecordPatch[] {
+  const ids = new Set([...before.keys(), ...after.keys()])
+  return [...ids].flatMap(id => {
+    const previous = before.get(id) ?? null
+    const next = after.get(id) ?? null
+    if (JSON.stringify(previous) === JSON.stringify(next)) return []
+    return [{ id, before: previous, after: next }]
+  })
+}
+
+function restoreRecordPatch(
+  editor: Editor,
+  patch: WhiteboardRecordPatch[],
+  recordHistory = true
+) {
+  validateRecordPatch(editor, patch)
+
+  if (recordHistory) {
+    editor.markHistoryStoppingPoint('Undo AI whiteboard transaction')
+  }
+  const remove = patch
+    .filter(entry => entry.before === null)
+    .map(entry => entry.id as TLShapeId)
+  const put = patch.flatMap(entry => (entry.before ? [entry.before] : []))
+  if (remove.length > 0) editor.store.remove(remove)
+  if (put.length > 0) editor.store.put(put)
+}
+
+function validateRecordPatch(editor: Editor, patch: WhiteboardRecordPatch[]) {
+  for (const entry of patch) {
+    const current = editor.store.get(entry.id as TLRecord['id']) ?? null
+    if (JSON.stringify(current) !== JSON.stringify(entry.after)) {
+      throw new Error(`Shape ${entry.id} changed after the AI transaction`)
+    }
+  }
+}
+
+function tikzItemToAction(item: TikzImportItem) {
+  if (item.type === 'geo') {
+    return {
+      type: 'create' as const,
+      shape: {
+        id: createShapeId(),
+        type: 'geo' as const,
+        x: item.x,
+        y: item.y,
+        props: { geo: item.geo, w: item.w, h: item.h },
+      },
+    }
+  }
+  if (item.type === 'arrow') {
+    return {
+      type: 'create' as const,
+      shape: {
+        id: createShapeId(),
+        type: 'arrow' as const,
+        x: item.x1,
+        y: item.y1,
+        props: {
+          start: { x: 0, y: 0 },
+          end: { x: item.x2 - item.x1, y: item.y2 - item.y1 },
+        },
+      },
+    }
+  }
+  if (item.type === 'plot') {
+    const { expression, xMin, xMax, yMin, yMax } = item
+    return {
+      type: 'create' as const,
+      shape: {
+        id: createShapeId(),
+        type: 'plot' as const,
+        x: 0,
+        y: 0,
+        props: { expression, xMin, xMax, yMin, yMax },
+      },
+    }
+  }
+  if (item.type === 'source-fragment') {
+    return {
+      type: 'create' as const,
+      shape: {
+        id: createShapeId(),
+        type: 'text' as const,
+        x: 0,
+        y: 0,
+        props: { text: item.warning },
+        meta: { tikzSourceFragment: item.source },
+      },
+    }
+  }
+  return {
+    type: 'create' as const,
+    shape: {
+      id: createShapeId(),
+      type: item.type,
+      x: item.x,
+      y: item.y,
+      props:
+        item.type === 'latex' ? { latex: item.value } : { text: item.value },
+    },
+  }
 }

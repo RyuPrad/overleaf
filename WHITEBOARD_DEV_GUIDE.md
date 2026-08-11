@@ -68,7 +68,31 @@ A simple way to use this project is:
 
 The whiteboard does not replace LaTeX; it is an extra file type inside the same Overleaf project.
 
-### 7. If the app does not open
+### 7. Use the Whiteboard Assistant
+
+When a `.tldraw` file is open, select the **Assistant** tab in the right rail.
+The Assistant can propose structured whiteboard edits and can optionally edit one
+linked `.tex` file. Choose **Suggest** to preview and accept a draft, or **Direct**
+for non-destructive changes to apply immediately. Deletions and substantial TeX
+removals are always forced back to Suggest mode. Applied transactions have an
+**Undo** action, which refuses to run if a collaborator changed an affected shape
+or the linked TeX content afterward.
+
+Use the chat picker at the top of the Assistant to switch between saved chat
+histories. **New Chat** creates a separate history and inherits the current
+Suggest/Direct mode and linked TeX file. The first successful prompt becomes the
+chat title; use the chat menu to rename or delete it. The selected chat is
+remembered separately for each project and whiteboard in the current browser.
+Chat histories are shared with project collaborators who can read the board.
+
+The Assistant reuses the authenticated ChatGPT-Web session maintained by the
+custom OpenCode installation. Authentication is mounted read-only into the
+Overleaf sidecar, while Overleaf keeps its own conversation map under the
+toolkit data directory. Deleting an Overleaf chat forgets only its local history
+and mapping; it does not delete the corresponding chat from the ChatGPT account
+or undo board/TeX changes that were already applied.
+
+### 8. If the app does not open
 
 First try these simple steps:
 
@@ -81,7 +105,7 @@ You can say:
 
 > My local Overleaf at `http://localhost/project` is not working. Please read `/root/src/overleaf-whiteboard/WHITEBOARD_DEV_GUIDE.md`, check the running services and logs, explain what is wrong in simple language, and do not delete or reset anything unless I approve it.
 
-### 8. If a whiteboard does not open correctly
+### 9. If a whiteboard does not open correctly
 
 Do not edit the raw contents of the `.tldraw` file yourself. Instead, ask an AI assistant to inspect the problem.
 
@@ -89,7 +113,7 @@ For example:
 
 > My `.tldraw` whiteboard is not loading correctly in local Overleaf. Please diagnose it without deleting the board or changing its saved data unless necessary.
 
-### 9. Things a normal user does not need to touch
+### 10. Things a normal user does not need to touch
 
 For everyday use, you can ignore:
 
@@ -264,7 +288,7 @@ This document is the machine-specific technical guide for the local Overleaf whi
 
 This branch adds collaborative `.tldraw` whiteboards to the Overleaf editor by treating `.tldraw` as an editable document type and rendering a tldraw canvas instead of the normal source editor when such a document is opened.
 
-The whiteboard state is persisted inside the Overleaf document as newline-delimited JSON diff records. This lets the implementation reuse Overleaf's existing document storage, realtime collaboration, permissions, and history mechanisms instead of introducing a separate whiteboard backend.
+The whiteboard state is persisted inside the Overleaf document as newline-delimited JSON diff or snapshot records. This lets the implementation reuse Overleaf's existing document storage, realtime collaboration, permissions, and history mechanisms. AI threads and transaction metadata are stored separately in MongoDB so they are shared by project collaborators.
 
 ## Git Repositories
 
@@ -272,7 +296,7 @@ The whiteboard state is persisted inside the Overleaf document as newline-delimi
 
 - Local path: `/root/src/overleaf-whiteboard`
 - Current feature branch: `feature/overleaf-whiteboard`
-- Current whiteboard commit: `4ca6ad7e6b1282a1b078ac3adbdc978799fdbc2a`
+- Development base commit: `9fde2052b2e21fd79a9b8c30dab97a1ef6663875`
 - Upstream remote: `origin -> https://github.com/overleaf/overleaf.git`
 - Writable fork remote: `fork -> https://github.com/RyuPrad/overleaf.git`
 - Pushed branch: `fork/feature/overleaf-whiteboard`
@@ -282,7 +306,8 @@ The upstream `origin` is read-only for this account. Push feature work to `fork`
 ### Overleaf Toolkit
 
 - Local path: `/root/overleaf-toolkit`
-- Local configuration: `/root/overleaf-toolkit/config/variables.env`
+- Local configuration: `/root/overleaf-toolkit/config/overleaf.rc` and
+  `/root/overleaf-toolkit/config/variables.env`
 - Local authentication overlay: `/root/overleaf-toolkit/local-noauth`
 
 The toolkit runs the locally built Overleaf image and supporting MongoDB/Redis containers.
@@ -294,6 +319,7 @@ The current local stack is:
 - `sharelatex` -> image `local/overleaf-noauth:6.2.2`
 - `mongo` -> image `mongo:8.0`
 - `redis` -> image `redis:7.4`
+- `chatgpt-web-overleaf` -> image `local/overleaf-chatgpt-web:1`
 - Overleaf HTTP endpoint -> `http://127.0.0.1`
 - Host binding -> `127.0.0.1:80 -> sharelatex:80`
 
@@ -315,12 +341,25 @@ Responsibilities:
 - Listens for Overleaf remote operations and reconciles the tldraw store from the canonical document snapshot.
 - Respects Overleaf write permissions by switching tldraw to read-only mode when needed.
 - Shows a read-only error banner when persisted whiteboard data is invalid or unsupported.
+- Registers safe structured LaTeX and function-plot shape types.
+- Applies, previews, and conflict-checks Assistant transactions.
+- Supports explicit lossless TikZ export/import.
 
 Current persistence constants:
 
 - Format: `overleaf-tldraw-diff`
-- Version: `1`
+- Version: `2` (version 1 diffs remain readable)
+- Snapshot format: `overleaf-tldraw-snapshot`
 - Local batching delay: `120 ms`
+
+Additional implementation areas:
+
+- `services/web/frontend/js/features/whiteboard/` — persistence, custom shapes,
+  safe math parsing, TikZ, scene actions, Assistant UI, and the active-board bridge.
+- `services/web/app/src/Features/WhiteboardAi/` — authenticated multi-session,
+  proposal, commit, reject, delete, rename, and undo APIs.
+- `services/chatgpt-web/` — isolated browser-session sidecar runtime.
+- `/root/overleaf-toolkit/doc/whiteboard-ai.md` — deployment and shared-auth guide.
 
 ### Editor routing
 
@@ -347,19 +386,21 @@ Added dependencies:
 
 ## Whiteboard Persistence Format
 
-Each line of a `.tldraw` Overleaf document is one JSON object with this structure:
+Most lines of a `.tldraw` Overleaf document are JSON diff objects with this structure:
 
 ```json
 {
   "format": "overleaf-tldraw-diff",
-  "version": 1,
+  "version": 2,
   "added": [],
   "updated": [],
   "removed": []
 }
 ```
 
-The implementation reconstructs the document by:
+Version 2 diffs may also carry `transactionId` and `source` metadata. Periodic
+`overleaf-tldraw-snapshot` records compact long histories. The implementation
+reconstructs the document by:
 
 1. Creating the required tldraw document and default page records.
 2. Parsing each non-empty line.
@@ -367,7 +408,7 @@ The implementation reconstructs the document by:
 4. Applying added and updated records.
 5. Removing deleted record IDs.
 
-This append-only format was chosen to map naturally onto Overleaf text operations and realtime collaboration.
+This format maps naturally onto Overleaf text operations and realtime collaboration while bounded compaction prevents indefinite append-only growth.
 
 ## Local Build Workflow
 
@@ -375,13 +416,16 @@ Run the Community image build from:
 
 `/root/src/overleaf-whiteboard/server-ce`
 
-Primary command:
+Preferred reproducible command:
 
 ```bash
-make build-community
+cd /root/overleaf-toolkit
+bin/build-whiteboard
 ```
 
-The successful whiteboard build produced an image based on branch name `feature/overleaf-whiteboard` and source revision `93a4f0c88a1aa3217db8773993ff178edff208d9` before the whiteboard commit was created.
+This builds the Community image from the configured source, the local no-auth
+wrapper, and the private ChatGPT-Web sidecar image. The lower-level
+`make build-community` command remains available from `server-ce`.
 
 During the successful build, webpack minifier parallelism was temporarily disabled to work around local memory pressure, then the webpack config was restored. There is no intentional webpack-config change in the whiteboard commit.
 
@@ -432,6 +476,7 @@ Expected services:
 - `sharelatex`
 - `mongo`
 - `redis`
+- `chatgpt-web-overleaf`
 
 ## Useful Verification Commands
 
@@ -470,15 +515,29 @@ The following was verified against the running local instance:
 
 - Production Community image build succeeds.
 - Local no-auth image builds successfully.
-- Overleaf, MongoDB, and Redis run successfully.
+- The sidecar image builds, starts healthy, enforces GPT-5.6 Sol / High, and
+  has no host port.
+- Overleaf, the sidecar, MongoDB, and Redis run successfully.
 - `.tldraw` appears in exposed editable text extensions.
 - The deployed IDE bundle contains the whiteboard implementation.
-- A temporary `.tldraw` document can be created through Overleaf's live `/project/:Project_id/doc` API.
-- The temporary `.tldraw` document can be deleted successfully with HTTP 204.
-- No whiteboard/tldraw server errors appeared during that API lifecycle verification.
+- A real `.tldraw` document opens as a tldraw canvas without browser-console
+  errors, including compatibility with the original persisted format.
+- The Assistant rail opens and its authenticated per-board session APIs return
+  200/201 for list, create, get, rename, and delete operations.
+- Two live Assistant sessions receive distinct ChatGPT conversation URLs; a
+  follow-up reuses the selected session's URL and retains its earlier context.
+- Session-to-conversation mappings survive a sidecar restart, and local deletion
+  forgets only the selected mapping and its local MongoDB history.
+- Common TikZ import renders a safe function plot and a structured LaTeX shape;
+  MathJax produces SVG for the equation.
+- Imported shapes survive a browser reload, and their cleanup survives another
+  reload.
+- Focused safe-math and TikZ tests pass (6 tests).
 - `git diff --check` passed before commit.
 
-Browser-based visual verification of the tldraw canvas was not completed because browser automation permission was rejected during that session. Future work should include interactive canvas verification.
+Live AI proposal generation uses the existing custom OpenCode ChatGPT-Web
+authentication through a read-only bind mount. Overleaf does not share
+OpenCode's conversation map.
 
 ## Recommended Manual Browser Test
 
@@ -539,15 +598,14 @@ Important assumptions for future agents:
 
 ## Known Technical Risks and Future Improvements
 
-### Append-only document growth
+### Browser-backed AI session
 
-Every whiteboard change currently appends another diff line. Long-lived boards may become large. A future compaction strategy may be necessary.
-
-Possible approach:
-
-- Periodically serialize a canonical snapshot.
-- Introduce a new persistence record type or format version.
-- Compact only when collaboration state is safe.
+The sidecar automates the ChatGPT web application rather than an official API.
+It deliberately fails closed when the required model and effort cannot be
+verified, but upstream UI changes can still require maintenance. Its session
+file is a secret and must remain private. Overleaf reads the custom OpenCode
+session through a read-only mount and stores its keyed conversation map in a
+separate toolkit data directory.
 
 ### Conflict/reconciliation behavior
 
@@ -559,7 +617,8 @@ The current implementation uses tldraw asset URLs for application assets, but ri
 
 ### Testing
 
-Future work should add automated tests for:
+The safe math evaluator and TikZ parser have focused tests. Future work should
+expand automated coverage for:
 
 - diff parsing and validation
 - serialization
@@ -570,16 +629,10 @@ Future work should add automated tests for:
 - `.tldraw` editor routing
 - multi-client realtime behavior
 
-## Current Commit
+## Current Worktree
 
-Whiteboard implementation commit:
-
-```text
-4ca6ad7e6b Add collaborative tldraw whiteboard support
-```
-
-Pushed to:
-
-```text
-https://github.com/RyuPrad/overleaf/tree/feature/overleaf-whiteboard
-```
+The complete whiteboard/Assistant implementation is currently an uncommitted
+worktree change on `feature/overleaf-whiteboard`, based on commit `9fde2052`.
+Review and commit it only after the final local acceptance pass. The deployment
+reuses only OpenCode's ChatGPT-Web authentication file; no OpenCode source or
+conversation state is copied into Overleaf.

@@ -33,6 +33,7 @@ import { EditorSelectionProvider } from '@/shared/context/editor-selection-conte
 import importOverleafModules from '../../../../macros/import-overleaf-module.macro'
 import { TutorialProvider } from '@/shared/context/tutorial-context'
 import { TabsProvider } from './tabs-context'
+import { WhiteboardEditorProvider } from '@/features/whiteboard/whiteboard-editor-context'
 
 const rootContextProviders = importOverleafModules('rootContextProviders') as {
   import: { default: ElementType }
@@ -82,9 +83,10 @@ export const ReactContextRoot: FC<
   }
 
   // Extract dynamic providers from modules
-  const dynamicProviders = rootContextProviders.map(
-    module => module.import.default
-  )
+  const dynamicProviders = [
+    WhiteboardEditorProvider,
+    ...rootContextProviders.map(module => module.import.default),
+  ]
 
   // Wrap children with all dynamic providers from outside to inside
   const childrenWrappedWithDynamicProviders =

@@ -233,6 +233,9 @@ module.exports = {
         '127.0.0.1'
       }:3003`,
     },
+    chatgptWeb: {
+      url: process.env.CHATGPT_WEB_URL || 'http://chatgpt-web-overleaf:8787',
+    },
     geoIpLookup: {
       cacheSize: intFromEnv('GEO_IP_LOOKUP_CACHE_SIZE', 10_000),
     },

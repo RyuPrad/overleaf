@@ -1,0 +1,8 @@
+node_modules/
+auth/
+.env
+*.log
+.playwright-mcp/
+*.bak
+*.bak-*
+.env.bak*

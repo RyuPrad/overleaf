@@ -34,6 +34,8 @@ import importOverleafModules from '../../../../../macros/import-overleaf-module.
 import { shouldIncludeElement } from '@/features/ide-react/util/rail-utils'
 import { useEditorContext } from '@/shared/context/editor-context'
 import useEventListener from '@/shared/hooks/use-event-listener'
+import WhiteboardAssistantPane from '@/features/whiteboard/assistant/whiteboard-assistant-pane'
+import { useWhiteboardEditor } from '@/features/whiteboard/whiteboard-editor-context'
 
 const moduleRailEntries = (
   importOverleafModules('railEntries') as {
@@ -70,6 +72,7 @@ export const RailLayout = () => {
     useRailContext()
   const { features } = useProjectContext()
   const { isRestrictedTokenMember } = useEditorContext()
+  const { activeBoardId } = useWhiteboardEditor()
   const gitBridgeEnabled = getMeta('ol-gitBridgeEnabled')
   const { isOverleaf } = getMeta('ol-ExposedSettings')
 
@@ -130,6 +133,13 @@ export const RailLayout = () => {
         disabled: view !== 'editor',
       },
       {
+        key: 'assistant',
+        icon: 'smart_toy',
+        component: <WhiteboardAssistantPane />,
+        title: 'Whiteboard Assistant',
+        hide: !activeBoardId || isRestrictedTokenMember,
+      },
+      {
         key: 'chat',
         icon: 'forum',
         component: <ChatPane />,
@@ -148,6 +158,7 @@ export const RailLayout = () => {
       isRestrictedTokenMember,
       isOverleaf,
       gitBridgeEnabled,
+      activeBoardId,
     ]
   )
 

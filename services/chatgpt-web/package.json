@@ -1,0 +1,24 @@
+{
+  "name": "@overleaf/chatgpt-web-sidecar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Private Playwright ChatGPT-Web sidecar for Overleaf Whiteboard.",
+  "exports": {
+    ".": "./provider.js",
+    "./runtime": "./server.js",
+    "./session": "./session.js"
+  },
+  "scripts": {
+    "export-session": "node export-session.js",
+    "start": "node server.js",
+    "check": "node --check server.js && node --check backends/playwright-backend.js",
+    "test": "CHATGPT_WEB_NO_SERVER=1 node --test test/*.test.js"
+  },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "chromium-bidi": "12.0.0",
+    "dotenv": "16.4.5",
+    "playwright": "1.61.1"
+  }
+}
