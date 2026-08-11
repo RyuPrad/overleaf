@@ -297,6 +297,7 @@ The whiteboard state is persisted inside the Overleaf document as newline-delimi
 - Local path: `/root/src/overleaf-whiteboard`
 - Current feature branch: `feature/overleaf-whiteboard`
 - Development base commit: `9fde2052b2e21fd79a9b8c30dab97a1ef6663875`
+- Whiteboard/Assistant implementation commit: `0d62c4684aa9ebfbb613ce67365a44bb80a45140`
 - Upstream remote: `origin -> https://github.com/overleaf/overleaf.git`
 - Writable fork remote: `fork -> https://github.com/RyuPrad/overleaf.git`
 - Pushed branch: `fork/feature/overleaf-whiteboard`
@@ -629,10 +630,12 @@ expand automated coverage for:
 - `.tldraw` editor routing
 - multi-client realtime behavior
 
-## Current Worktree
+## Current Implementation
 
-The complete whiteboard/Assistant implementation is currently an uncommitted
-worktree change on `feature/overleaf-whiteboard`, based on commit `9fde2052`.
-Review and commit it only after the final local acceptance pass. The deployment
-reuses only OpenCode's ChatGPT-Web authentication file; no OpenCode source or
-conversation state is copied into Overleaf.
+The complete whiteboard/Assistant implementation is committed as
+`0d62c4684aa9ebfbb613ce67365a44bb80a45140` and pushed to
+`fork/feature/overleaf-whiteboard`. Its toolkit deployment support is committed
+as `7a9e8ab9edca58cba1d2f7673c0b0056cb096117` and pushed to the personal
+toolkit repository. The deployment reuses only OpenCode's ChatGPT-Web
+authentication file; no OpenCode source or conversation state is copied into
+Overleaf.
