@@ -7478,6 +7478,7 @@ __metadata:
     handlebars: "npm:^4.7.9"
     handlebars-loader: "npm:^1.7.3"
     helmet: "npm:^6.0.1"
+    hfmath: "npm:0.0.2"
     html-webpack-plugin: "npm:^5.6.7"
     https-proxy-agent: "npm:^7.0.6"
     i18next: "npm:^23.10.0"
@@ -20435,6 +20436,13 @@ __metadata:
   version: 6.2.0
   resolution: "helmet@npm:6.2.0"
   checksum: 10c0/52d97adfdb151ebdc08e5d78eb93eebfb7e8e3e0563e68664828138dc6ab2d9d512b4ae71e1f8c6fcf8ddc38f87908325971d95dcabaafd4fde1f5b0faabeb8c
+  languageName: node
+  linkType: hard
+
+"hfmath@npm:0.0.2":
+  version: 0.0.2
+  resolution: "hfmath@npm:0.0.2"
+  checksum: 10c0/112362103df51f7971a192402a575a65fc0155588b6a816051ac0de075bc014e1fae2a955d978f7d29b188df6a592340d6a0e3c1a00dc046fb7a3f0c7adf3022
   languageName: node
   linkType: hard
 

@@ -12,6 +12,8 @@ describe("whiteboard text shape normalization", function () {
     const props = normalizeTextShapeProps({
       text: "First step\\n\\nSecond step\\nFinal answer",
       size: "m",
+      h: 180,
+      height: 180,
     });
 
     expect(props).to.include({
@@ -19,6 +21,8 @@ describe("whiteboard text shape normalization", function () {
       autoSize: false,
       size: "m",
     });
+    expect(props).not.to.have.property("h");
+    expect(props).not.to.have.property("height");
     expect(paragraphText(props.richText)).to.deep.equal([
       "First step",
       "",

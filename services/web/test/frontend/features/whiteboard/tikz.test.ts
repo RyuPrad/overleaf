@@ -39,6 +39,46 @@ describe("whiteboard TikZ interchange", function () {
     }
   });
 
+  it("exports handwritten shapes as vector TikZ paths", function () {
+    const inkShape = {
+      id: "shape:q13-ink",
+      typeName: "shape",
+      type: "ink",
+      x: 40,
+      y: 80,
+      rotation: 0,
+      index: "a2",
+      parentId: "page:page",
+      isLocked: false,
+      opacity: 1,
+      meta: {},
+      props: {
+        source: "\\boxed{\\frac{x-2}{x-3} \\leq 0}",
+        format: "latex",
+        w: 600,
+        h: 96,
+        size: "m",
+        color: "#1f2937",
+      },
+    } as unknown as TLRecord;
+
+    const source = exportWhiteboardToTikz({
+      boardId: "board-ink",
+      records: [inkShape],
+    });
+
+    expect(source).to.contain("\\draw[line width=2.16pt");
+    expect(source).to.contain("line cap=round");
+    expect(source).to.contain("opacity=0.9");
+    expect(source).to.contain("plot[smooth] coordinates");
+    expect(source).to.contain(" -- ");
+    const result = importWhiteboardFromTikz(source);
+    expect(result.kind).to.equal("round-trip");
+    if (result.kind === "round-trip") {
+      expect(result.records).to.deep.equal([inkShape]);
+    }
+  });
+
   it("parses relative rectangles using their real dimensions", function () {
     const result = importWhiteboardFromTikz(
       "\\begin{tikzpicture}\n\\draw (1,2) rectangle ++(3,-4);\n\\end{tikzpicture}",

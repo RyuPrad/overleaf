@@ -1,4 +1,5 @@
 import type { TLRecord, TLShape } from "tldraw";
+import { InkShapeProps, inkStrokeWidth, renderInk } from "./ink-rendering";
 
 const FORMAT_HEADER = "% overleaf-whiteboard-format: 1";
 const RECORD_PREFIX = "% overleaf-whiteboard-record: ";
@@ -156,15 +157,40 @@ function shapeToTikz(shape: TLShape): string[] {
     ];
   }
 
-  if (shape.type === "draw") {
-    const points = drawPoints(props.segments);
-    if (points.length > 1) {
+  if (shape.type === "ink") {
+    const inkProps = props as InkShapeProps;
+    const rendered = renderInk(inkProps, shape.id);
+    if (!rendered.error) {
       return [
-        `\\draw plot[smooth] coordinates {${points
-          .map((value) => point(shape.x + value.x, shape.y + value.y))
-          .join(" ")}}; % ${id}`,
+        ...rendered.strokes.flatMap((stroke) =>
+          stroke.polylines
+            .filter((polyline) => polyline.length > 1)
+            .map(
+              (polyline) =>
+                `\\draw[${inkTikzOptions(inkProps, stroke.width, stroke.opacity)}] plot[smooth] coordinates {${polyline
+                  .map((value) => point(shape.x + value.x, shape.y + value.y))
+                  .join(" ")}}; % ${id}`,
+            ),
+        ),
+        ...rendered.decorations.map(
+          (decoration) =>
+            `\\draw[${inkTikzOptions(inkProps, decoration.width, decoration.opacity)}] ${decoration.polyline
+              .map((value) => point(shape.x + value.x, shape.y + value.y))
+              .join(" -- ")}; % ${id}`,
+        ),
       ];
     }
+  }
+
+  if (shape.type === "draw") {
+    return drawPolylines(props.segments)
+      .filter((polyline) => polyline.length > 1)
+      .map(
+        (polyline) =>
+          `\\draw plot[smooth] coordinates {${polyline
+            .map((value) => point(shape.x + value.x, shape.y + value.y))
+            .join(" ")}}; % ${id}`,
+      );
   }
 
   return [
@@ -287,10 +313,7 @@ function encodeRecord(record: TLRecord) {
 
 function decodeRecord(value: string): TLRecord {
   const encoded = value.trim();
-  if (
-    encoded.length % 4 !== 0 ||
-    !/^[a-zA-Z0-9+/]*={0,2}$/.test(encoded)
-  ) {
+  if (encoded.length % 4 !== 0 || !/^[a-zA-Z0-9+/]*={0,2}$/.test(encoded)) {
     throw new Error("Invalid generated whiteboard record");
   }
   const bytes: number[] = [];
@@ -308,7 +331,9 @@ function decodeRecord(value: string): TLRecord {
     if (characters[2] !== "=") bytes.push((value >> 8) & 255);
     if (characters[3] !== "=") bytes.push(value & 255);
   }
-  return JSON.parse(new TextDecoder().decode(Uint8Array.from(bytes))) as TLRecord;
+  return JSON.parse(
+    new TextDecoder().decode(Uint8Array.from(bytes)),
+  ) as TLRecord;
 }
 
 function point(x: number, y: number) {
@@ -337,14 +362,34 @@ function pointFromUnknown(value: unknown) {
   return { x: numberProp(point.x, 0), y: numberProp(point.y, 0) };
 }
 
-function drawPoints(value: unknown) {
+function drawPolylines(value: unknown) {
   if (!Array.isArray(value)) return [];
-  return value.flatMap((segment) => {
+  return value.map((segment) => {
     if (!segment || typeof segment !== "object") return [];
     const points = (segment as { points?: unknown }).points;
     if (!Array.isArray(points)) return [];
     return points.map(pointFromUnknown);
   });
+}
+
+function inkTikzOptions(
+  props: InkShapeProps,
+  width = inkStrokeWidth(props.size),
+  opacity = 1,
+) {
+  const color = /^#[\da-f]{6}$/i.test(props.color)
+    ? props.color.slice(1)
+    : "1F2937";
+  const red = Number.parseInt(color.slice(0, 2), 16);
+  const green = Number.parseInt(color.slice(2, 4), 16);
+  const blue = Number.parseInt(color.slice(4, 6), 16);
+  return [
+    `line width=${round(width)}pt`,
+    "line cap=round",
+    "line join=round",
+    ...(opacity < 1 ? [`opacity=${round(opacity)}`] : []),
+    `draw={rgb,255:red,${red};green,${green};blue,${blue}}`,
+  ].join(",");
 }
 
 function richTextToPlainText(value: unknown): string {

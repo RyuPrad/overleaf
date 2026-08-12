@@ -22,6 +22,11 @@ export const WhiteboardAiThreadSchema = new Schema(
     titleIsCustom: { type: Boolean, default: false },
     linkedDocId: { type: Schema.Types.ObjectId },
     mode: { type: String, enum: ["direct", "suggest"], default: "suggest" },
+    writingStyle: {
+      type: String,
+      enum: ["standard", "handwritten", "pen"],
+      default: "standard",
+    },
     messages: { type: [MessageSchema], default: [] },
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },

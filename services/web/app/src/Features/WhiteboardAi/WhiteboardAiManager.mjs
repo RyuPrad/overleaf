@@ -12,8 +12,12 @@ const MAX_CONTEXT_BYTES = 200_000;
 const MAX_LINKED_TEX_BYTES = 250_000;
 const MAX_FILE_REFERENCES = 20;
 const MAX_IMAGE_BYTES = 950_000;
+const MAX_INK_SHAPES = 60;
+const MAX_INK_SOURCE_LENGTH = 4_000;
+const MAX_INK_TRANSACTION_CHARACTERS = 16_000;
 const REQUEST_TIMEOUT_MS = 20 * 60 * 1000;
 const DEFAULT_SIDECAR_URL = "http://chatgpt-web-overleaf:8787";
+const WRITING_STYLES = new Set(["standard", "handwritten", "pen"]);
 
 const SYSTEM_PROMPT = `You are the shared Overleaf Whiteboard assistant. Use the
 propose_transaction tool for every response, including an explanation-only response
@@ -26,6 +30,22 @@ When writing worked solutions on the board, use a clear top-to-bottom layout. Te
 shapes must use real line breaks rather than visible backslash-n text. Give long or
 multiline text shapes a width between 480 and 760 with autoSize false, use latex
 shapes for important equations, and leave enough vertical space to prevent overlap.
+Use the fewest blocks needed for full marks, usually six to twelve: a short question
+heading, the original statement, compact working, only the justifications a student
+would write under test conditions, and a final LaTeX answer wrapped in \\boxed{...}.
+For sign charts, use real line breaks and at least two spaces between aligned columns.
+Keep prose in text shapes and equations in latex shapes. Do not put prose and a
+LaTeX environment in the same shape, and use Unicode math symbols or plain words
+instead of raw TeX commands inside text shapes.
+Every board action type must be create, update, delete, group, align, or
+distribute. Never use add. The host owns camera framing, so never return camera
+actions. For create actions, place visual properties inside the shape props
+object and use w/h rather than width/height.
+The current request includes a writingStyle. For handwritten or pen output, write
+the concise, correct steps and brief justifications a strong student would put on a
+test for full marks. Do not add teacher commentary or intentionally introduce errors.
+Continue proposing semantic text and latex shapes; the host renders their requested
+handwriting treatment. Use separate blocks for logical steps so they remain readable.
 Use stable existing shape ids for updates. Prefer small, reviewable changes. Never
 claim an action was applied; you only propose transactions.`;
 
@@ -50,6 +70,7 @@ export async function createSession({
     title: "New chat",
     titleIsCustom: false,
     mode: inherited?.mode || "suggest",
+    writingStyle: normalizeStoredWritingStyle(inherited?.writingStyle),
     ...(inherited?.linkedDocId ? { linkedDocId: inherited.linkedDocId } : {}),
   });
 }
@@ -89,6 +110,7 @@ export async function updateSessionSettings({
   sessionId,
   linkedDocId,
   mode,
+  writingStyle,
 }) {
   if (!["direct", "suggest"].includes(mode)) {
     throw badRequest("Mode must be direct or suggest");
@@ -96,11 +118,20 @@ export async function updateSessionSettings({
   const normalizedLinkedDocId = linkedDocId
     ? validId(linkedDocId, "linked document")
     : null;
+  const normalizedWritingStyle =
+    writingStyle == null ? "standard" : validateWritingStyle(writingStyle);
   const now = new Date();
   const update = {
-    $set: { mode, updatedAt: now },
+    $set: { mode, writingStyle: normalizedWritingStyle, updatedAt: now },
     ...(normalizedLinkedDocId
-      ? { $set: { mode, linkedDocId: normalizedLinkedDocId, updatedAt: now } }
+      ? {
+          $set: {
+            mode,
+            writingStyle: normalizedWritingStyle,
+            linkedDocId: normalizedLinkedDocId,
+            updatedAt: now,
+          },
+        }
       : { $unset: { linkedDocId: 1 } }),
   };
   const session = await WhiteboardAiThread.findOneAndUpdate(
@@ -147,6 +178,7 @@ export async function propose({
   scene,
   image,
   mode,
+  writingStyle,
   linkedDocId,
   fileReferences = [],
 }) {
@@ -158,6 +190,7 @@ export async function propose({
     sessionId,
     linkedDocId,
     mode,
+    writingStyle,
   });
   const [docs, files] = await Promise.all([
     ProjectEntityHandler.promises.getAllDocs(projectId),
@@ -182,12 +215,19 @@ export async function propose({
     linkedDoc,
     referencedFiles,
     projectContext,
+    writingStyle: normalizeStoredWritingStyle(thread.writingStyle),
   });
   messages.push({ role: "user", content: currentContent });
 
   const response = await callSidecar(messages, thread._id);
   const proposal = parseToolProposal(response);
-  const boardActions = validateBoardActions(proposal.boardActions, scene);
+  const boardActions = validateBoardActions(
+    normalizeBoardActionsForWritingStyle(
+      proposal.boardActions,
+      normalizeStoredWritingStyle(thread.writingStyle),
+    ),
+    scene,
+  );
   const texChange = applyTexEdits(linkedDoc, proposal.texEdits);
   const forcedSuggest =
     hasDestructiveBoardAction(boardActions) ||
@@ -439,10 +479,276 @@ function parseToolProposal(response) {
   return value;
 }
 
+function normalizeBoardActionsForWritingStyle(value, writingStyle) {
+  if (!Array.isArray(value)) return value;
+
+  const canonicalActions = value.map(canonicalBoardAction);
+
+  let inkShapes = 0;
+  let inkCharacters = 0;
+  const trackInk = (source) => {
+    inkShapes += 1;
+    inkCharacters += source.length;
+    if (
+      inkShapes > MAX_INK_SHAPES ||
+      inkCharacters > MAX_INK_TRANSACTION_CHARACTERS
+    ) {
+      throw new Error("Assistant returned too much handwritten content");
+    }
+  };
+
+  return canonicalActions.map((action) => {
+    if (
+      !plainObject(action) ||
+      action.type !== "create" ||
+      !plainObject(action.shape) ||
+      !plainObject(action.shape.props)
+    ) {
+      return action;
+    }
+
+    const shape = action.shape;
+    if (
+      shape.type === "ink" &&
+      shape.props.format === "text" &&
+      writingStyle === "handwritten"
+    ) {
+      const source = inkSource(shape.props, "text");
+      if (!source) {
+        throw new Error("Assistant returned handwritten content without text");
+      }
+      // Keep aligned tables as fixed-width ink so their columns remain
+      // legible; ordinary prose in Handwritten mode must stay editable.
+      if (!isAlignedTextTable(source)) {
+        return {
+          ...action,
+          shape: {
+            ...shape,
+            type: "text",
+            props: {
+              text: source,
+              w: boundedNumber(shape.props.w, 320, 900, 640),
+              autoSize: false,
+              size: ["s", "m", "l", "xl"].includes(shape.props.size)
+                ? shape.props.size
+                : "m",
+              color: normalizeTldrawTextColor(shape.props.color),
+              font: "draw",
+            },
+          },
+        };
+      }
+    }
+    if (shape.type === "text" && writingStyle === "handwritten") {
+      return {
+        ...action,
+        shape: {
+          ...shape,
+          props: { ...shape.props, font: "draw" },
+        },
+      };
+    }
+
+    let format = null;
+    if (shape.type === "ink") {
+      format = shape.props.format;
+    } else if (
+      shape.type === "latex" &&
+      (writingStyle === "handwritten" || writingStyle === "pen")
+    ) {
+      format = "latex";
+    } else if (shape.type === "text" && writingStyle === "pen") {
+      format = "text";
+    }
+    if (!format) return action;
+
+    const source = inkSource(shape.props, format);
+    if (!source) {
+      throw new Error("Assistant returned handwritten content without text");
+    }
+    if (source.length > MAX_INK_SOURCE_LENGTH) {
+      throw new Error("Assistant returned an oversized handwritten block");
+    }
+    trackInk(source);
+
+    const width = boundedNumber(shape.props.w, 320, 900, 640);
+    const size = ["s", "m", "l", "xl"].includes(shape.props.size)
+      ? shape.props.size
+      : "m";
+    return {
+      ...action,
+      shape: {
+        ...shape,
+        id: shape.id || `ai_ink_${crypto.randomUUID().replaceAll("-", "_")}`,
+        type: "ink",
+        props: {
+          source,
+          format,
+          w: width,
+          h: estimateInkHeight({
+            source,
+            format,
+            width,
+            size,
+            requestedHeight: shape.props.h,
+          }),
+          size,
+          color: normalizeInkColor(shape.props.color),
+        },
+      },
+    };
+  });
+}
+
+function canonicalBoardAction(action) {
+  if (!plainObject(action)) return action;
+
+  if (action.type === "remove" && typeof action.id === "string") {
+    return { type: "delete", ids: [action.id] };
+  }
+
+  if (action.type !== "add" && action.type !== "create") return action;
+  if (!plainObject(action.shape)) return action;
+
+  const shape = action.shape;
+  const props = plainObject(shape.props) ? { ...shape.props } : {};
+  for (const [key, value] of Object.entries(shape)) {
+    if (
+      !["id", "type", "x", "y", "props", "meta", "width", "height"].includes(
+        key,
+      )
+    ) {
+      props[key] ??= value;
+    }
+  }
+  if (props.w == null && finite(shape.width)) props.w = shape.width;
+  if (shape.type !== "text" && props.h == null && finite(shape.height)) {
+    props.h = shape.height;
+  }
+  if (shape.type === "text") {
+    delete props.h;
+    delete props.height;
+  }
+
+  return {
+    type: "create",
+    shape: {
+      ...(typeof shape.id === "string" ? { id: shape.id } : {}),
+      type: shape.type,
+      x: shape.x,
+      y: shape.y,
+      props,
+      ...(plainObject(shape.meta) ? { meta: shape.meta } : {}),
+    },
+  };
+}
+
+function inkSource(props, format) {
+  let source;
+  if (format === "latex") {
+    source = props.source ?? props.latex;
+  } else {
+    source = props.source ?? props.text ?? richTextToPlainText(props.richText);
+  }
+  if (typeof source !== "string") return "";
+  return (
+    format === "text"
+      ? source.replace(/\r\n?/g, "\n").replace(/\\r\\n|\\n|\\r/g, "\n")
+      : source
+  ).trim();
+}
+
+function richTextToPlainText(value) {
+  if (!plainObject(value)) return "";
+  if (typeof value.text === "string") return value.text;
+  if (!Array.isArray(value.content)) return "";
+  return value.content.map(richTextToPlainText).join("\n");
+}
+
+function isAlignedTextTable(source) {
+  return (
+    /(?:sign|interval)\s*chart/i.test(source) ||
+    source.split("\n").some((line) => /\S\s{2,}\S/.test(line))
+  );
+}
+
+function normalizeTldrawTextColor(value) {
+  const named = new Set([
+    "black",
+    "blue",
+    "green",
+    "grey",
+    "light-blue",
+    "light-green",
+    "light-red",
+    "light-violet",
+    "orange",
+    "red",
+    "violet",
+    "white",
+    "yellow",
+  ]);
+  const normalized = String(value || "black").toLowerCase();
+  if (named.has(normalized)) return normalized;
+  return {
+    "#172033": "black",
+    "#1f2937": "black",
+    "#2563eb": "blue",
+    "#dc2626": "red",
+    "#059669": "green",
+    "#6b7280": "grey",
+  }[normalized] || "black";
+}
+
+function estimateInkHeight({ source, format, width, size, requestedHeight }) {
+  const fontSize = { s: 24, m: 32, l: 40, xl: 52 }[size];
+  if (format === "latex") {
+    return boundedNumber(
+      requestedHeight,
+      64,
+      1_200,
+      Math.max(96, Math.round(fontSize * 2.5)),
+    );
+  }
+  const charactersPerLine = Math.max(12, Math.floor(width / (fontSize * 0.58)));
+  const lines = source
+    .split("\n")
+    .reduce(
+      (count, line) =>
+        count +
+        Math.max(1, Math.ceil(Math.max(1, line.length) / charactersPerLine)),
+      0,
+    );
+  return Math.min(2_000, Math.max(48, Math.ceil(lines * fontSize * 1.34 + 28)));
+}
+
+function normalizeInkColor(value) {
+  const palette = {
+    black: "#172033",
+    blue: "#2563eb",
+    red: "#dc2626",
+    green: "#059669",
+    grey: "#6b7280",
+    gray: "#6b7280",
+  };
+  if (typeof value === "string" && /^#[\da-f]{6}$/i.test(value)) {
+    return value.toLowerCase();
+  }
+  return palette[String(value).toLowerCase()] || palette.black;
+}
+
+function boundedNumber(value, minimum, maximum, fallback) {
+  return finite(value) ? Math.min(maximum, Math.max(minimum, value)) : fallback;
+}
+
 function validateBoardActions(value, scene) {
   if (!Array.isArray(value) || value.length > 200) {
     throw new Error("Assistant returned too many board actions");
   }
+  // Camera framing is a host concern. Models occasionally return malformed
+  // camera actions even when the prompt does not ask for them; discarding all
+  // of them keeps a valid board proposal from becoming a generic HTTP 500.
+  const boardActions = value.filter((action) => action?.type !== "camera");
   const allowed = new Set([
     "create",
     "update",
@@ -450,7 +756,6 @@ function validateBoardActions(value, scene) {
     "group",
     "align",
     "distribute",
-    "camera",
   ]);
   const sceneShapes = new Map(
     scene
@@ -465,7 +770,9 @@ function validateBoardActions(value, scene) {
     "right",
     "top",
   ]);
-  for (const action of value) {
+  let inkShapes = 0;
+  let inkCharacters = 0;
+  for (const action of boardActions) {
     if (!action || typeof action !== "object" || !allowed.has(action.type)) {
       throw new Error("Assistant returned an unsupported board action");
     }
@@ -473,13 +780,26 @@ function validateBoardActions(value, scene) {
       const shape = action.shape;
       if (
         !shape ||
-        !["geo", "text", "arrow", "latex", "plot"].includes(shape.type) ||
+        !["geo", "text", "arrow", "latex", "plot", "ink"].includes(
+          shape.type,
+        ) ||
         !finite(shape.x) ||
         !finite(shape.y) ||
         !plainObject(shape.props) ||
         (shape.id != null && !validShapeId(shape.id))
       ) {
         throw new Error("Assistant returned an invalid create action");
+      }
+      if (shape.type === "ink") {
+        validateInkShape(shape.props);
+        inkShapes += 1;
+        inkCharacters += shape.props.source.length;
+        if (
+          inkShapes > MAX_INK_SHAPES ||
+          inkCharacters > MAX_INK_TRANSACTION_CHARACTERS
+        ) {
+          throw new Error("Assistant returned too much handwritten content");
+        }
       }
       if (shape.id != null) {
         const id = shape.id.startsWith("shape:")
@@ -517,20 +837,32 @@ function validateBoardActions(value, scene) {
       if (!["horizontal", "vertical"].includes(action.axis)) {
         throw new Error("Assistant returned an invalid distribution action");
       }
-    } else if (
-      !finite(action.x) ||
-      !finite(action.y) ||
-      !finite(action.zoom) ||
-      action.zoom <= 0 ||
-      action.zoom > 16
-    ) {
-      throw new Error("Assistant returned an invalid camera action");
     }
     if (Buffer.byteLength(JSON.stringify(action)) > 50_000) {
       throw new Error("Assistant returned an oversized board action");
     }
   }
-  return value;
+  return boardActions;
+}
+
+function validateInkShape(props) {
+  if (
+    typeof props.source !== "string" ||
+    !props.source.trim() ||
+    props.source.length > MAX_INK_SOURCE_LENGTH ||
+    !["text", "latex"].includes(props.format) ||
+    !finite(props.w) ||
+    props.w < 320 ||
+    props.w > 900 ||
+    !finite(props.h) ||
+    props.h < 48 ||
+    props.h > 2_000 ||
+    !["s", "m", "l", "xl"].includes(props.size) ||
+    typeof props.color !== "string" ||
+    !/^#[\da-f]{6}$/i.test(props.color)
+  ) {
+    throw new Error("Assistant returned an invalid handwritten shape");
+  }
 }
 
 function validateExistingIds(ids, sceneShapes) {
@@ -716,10 +1048,12 @@ function buildCurrentContent({
   linkedDoc,
   referencedFiles,
   projectContext,
+  writingStyle,
 }) {
   const text = JSON.stringify({
     request: prompt,
     boardId,
+    writingStyle,
     scene,
     linkedTex: linkedDoc
       ? {
@@ -804,6 +1138,17 @@ function validateFileReferences(value) {
     references.push({ id, kind: reference.kind });
   }
   return references;
+}
+
+function validateWritingStyle(value) {
+  if (!WRITING_STYLES.has(value)) {
+    throw badRequest("Writing style must be standard, handwritten, or pen");
+  }
+  return value;
+}
+
+function normalizeStoredWritingStyle(value) {
+  return WRITING_STYLES.has(value) ? value : "standard";
 }
 
 function hasDestructiveBoardAction(actions) {

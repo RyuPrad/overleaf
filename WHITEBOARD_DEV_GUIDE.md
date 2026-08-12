@@ -80,10 +80,40 @@ or the linked TeX content afterward.
 
 Use the chat picker at the top of the Assistant to switch between saved chat
 histories. **New Chat** creates a separate history and inherits the current
-Suggest/Direct mode and linked TeX file. The first successful prompt becomes the
-chat title; use the chat menu to rename or delete it. The selected chat is
-remembered separately for each project and whiteboard in the current browser.
-Chat histories are shared with project collaborators who can read the board.
+Suggest/Direct mode, linked TeX file, and Board writing style. The first
+successful prompt becomes the chat title; use the chat menu to rename or delete
+it. The selected chat is remembered separately for each project and whiteboard
+in the current browser. Chat histories are shared with project collaborators
+who can read the board.
+
+Use **Board writing** to choose how new Assistant work appears in the selected
+chat:
+
+- **Standard** keeps the normal editable tldraw text and structured math.
+- **Handwritten** uses tldraw's editable draw-font text and renders structured
+  mathematics as pen strokes.
+- **Pen strokes** renders both words and mathematics as vector pen strokes.
+
+The choice is saved per chat, included in every proposal, and inherited by
+**New Chat**. Handwritten output appears as soon as the transaction is applied;
+there is no image-generation wait. Pen-stroke blocks remain movable,
+selectable, undoable, collaborative, persistent, and exportable, while their
+semantic source is retained for later Assistant updates. Use Handwritten when
+you want to edit ordinary words with tldraw's text tool; Pen strokes prioritize
+the appearance of an entirely handwritten test solution.
+
+Handwritten mode enforces that distinction even if the model requests prose as
+ink: ordinary text is converted back to editable draw-font text, mathematics
+stays vector ink, and aligned sign charts stay fixed-width ink so their columns
+remain legible.
+
+Student-style ink is laid out as a compact solution column. The host measures
+each semantic block, preserves extra spaces in sign charts, leaves larger gaps
+around headings and final answers, and moves a new column away from existing
+board work. After a successful apply, the camera frames only the affected
+shapes with room for the tldraw toolbar. This framing is owned by Overleaf—not
+the AI model—so a malformed model camera instruction cannot fail an otherwise
+valid solution.
 
 To refer to a project file in a prompt, type `@` in the message box. Continue
 typing to filter by filename or folder path, then choose a result with the mouse
@@ -362,6 +392,8 @@ Responsibilities:
 - Respects Overleaf write permissions by switching tldraw to read-only mode when needed.
 - Shows a read-only error banner when persisted whiteboard data is invalid or unsupported.
 - Registers safe structured LaTeX and function-plot shape types.
+- Registers semantic handwritten ink shapes rendered as deterministic SVG
+  strokes without external runtime assets.
 - Applies, previews, and conflict-checks Assistant transactions.
 - Supports explicit lossless TikZ export/import.
 
@@ -384,6 +416,15 @@ Additional implementation areas:
 - `services/web/frontend/js/features/whiteboard/text-shape-normalization.ts` —
   readable Assistant text widths, escaped-line-break conversion, and narrowly
   scoped replay/reflow compatibility for malformed legacy Assistant shapes.
+- `services/web/frontend/js/features/whiteboard/ink-rendering.ts` — bounded,
+  deterministic Hershey-font text/LaTeX rendering into smooth, pressure-varied
+  pen-stroke groups, including word-level variation, Unicode/inline-TeX
+  normalization, aligned tables, and hand-drawn answer boxes.
+- `services/web/frontend/js/features/whiteboard/shapes/ink-shape.tsx` — the
+  persisted tldraw custom shape that retains semantic source and renders SVG.
+- `services/web/frontend/js/features/whiteboard/writing-layout.ts` — compacts
+  role-aware writing blocks into a solution column and moves the entire column
+  to a collision-free area with visual separation from existing work.
 - `services/chatgpt-web/` — isolated browser-session sidecar runtime.
 - `/root/overleaf-toolkit/doc/whiteboard-ai.md` — deployment and shared-auth guide.
 
@@ -407,8 +448,33 @@ Added dependencies:
 
 - `tldraw: 4.2.0`
 - `@tldraw/assets: 4.2.0`
+- `hfmath: 0.0.2` (local text/LaTeX-to-polyline rendering; no CDN or service)
 
 `yarn.lock` contains the resolved tldraw dependency graph.
+
+Assistant threads also persist `writingStyle` as one of `standard`,
+`handwritten`, or `pen`. The proposal boundary converts semantic model-created
+text/LaTeX actions into the selected host representation and enforces per-shape
+and per-transaction ink limits before tldraw sees them. This keeps the model
+prompt readable, preserves a compact board record, and prevents unbounded SVG
+work.
+
+The natural-ink pass is deterministic for collaboration and replay, but avoids
+the mechanical look of a single uniform SVG path. It renders prose word by
+word with small seeded changes in baseline, width, and rotation; groups paths
+into three pressure widths/opacities; smooths sampled paths; uses near-black ink
+by default; centres sign-chart cells; and draws `\\boxed`/`\\fbox` borders as
+slightly imperfect vector strokes. Mixed model output is handled defensively:
+prose accidentally placed beside an aligned LaTeX environment is separated and
+wrapped, while common inline TeX inside prose is translated to readable symbols
+and fractions instead of exposing command names on the board.
+
+After commit, the frontend derives bounds from the transaction's `after`
+records, clears selection, and zooms to those records with toolbar-safe inset.
+Model-authored camera actions are discarded at the authenticated service
+boundary because result framing belongs to the host. This also prevents a
+malformed optional camera action from turning valid board actions into a generic
+HTTP 500.
 
 ## Whiteboard Persistence Format
 
@@ -561,14 +627,34 @@ The following was verified against the running local instance:
   replays as three bounded multiline text blocks. Browser geometry checks report
   positive gaps between every block, and the rendered board has no console
   errors.
+- A live Question 13 prompt referencing `MHF4U-Unit-1-Assignment.tex` through
+  the real `@` picker applies in Handwritten mode as three editable draw-font
+  text blocks and four semantic math-ink blocks. A retained Pen strokes chat
+  applies all ten of its worked-solution blocks as semantic vector ink. Both
+  paths complete without alerts, page errors, unexpected console errors, or
+  HTTP 500 responses.
+- Original-resolution visual review of the live Handwritten result confirms a
+  compact full solution, readable student-style prose, stacked fractions,
+  aligned rational-inequality steps, a legible sign chart, and a real
+  hand-drawn box around `x ∈ (7/9, 3)`. The final answer remains above the
+  toolbar and the focused column does not overlap existing work.
+- Handwritten ink persists across a container restart and browser reload. Common
+  model LaTeX used by the live solution—including aligned lines, compact
+  fractions, inequality aliases, arrows, and boxed answers—renders as math
+  strokes rather than visible command text.
+- A fresh browser reload after deployment finds the retained Pen title and
+  boxed answer with no persistence warning. Exporting that live board produces
+  a 2.57 MB TikZ file with all 54 round-trip shape records and 8,467 vector
+  draw paths.
 - Session-to-conversation mappings survive a sidecar restart, and local deletion
   forgets only the selected mapping and its local MongoDB history.
 - Common TikZ import renders a safe function plot and a structured LaTeX shape;
   MathJax produces SVG for the equation.
 - Imported shapes survive a browser reload, and their cleanup survives another
   reload.
-- Focused safe-math and TikZ tests pass (6 tests).
-- Focused Assistant text normalization/reflow tests pass (5 tests).
+- Focused frontend handwriting, layout, text-normalization, and TikZ tests pass
+  (22 tests).
+- Focused Assistant manager tests pass (8 tests).
 - `git diff --check` passed before commit.
 
 Live AI proposal generation uses the existing custom OpenCode ChatGPT-Web

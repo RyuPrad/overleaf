@@ -10,9 +10,12 @@ const LEGACY_COLUMN_TOLERANCE = 80;
 const LEGACY_BLOCK_MARGIN = 128;
 
 export function normalizeTextShapeProps(props: Record<string, unknown>) {
-  if (typeof props.text !== "string") return props;
+  const dimensionlessProps = { ...props };
+  delete dimensionlessProps.h;
+  delete dimensionlessProps.height;
+  if (typeof dimensionlessProps.text !== "string") return dimensionlessProps;
 
-  const { text, ...rest } = props;
+  const { text, ...rest } = dimensionlessProps;
   const normalizedText = normalizeLineBreaks(text);
   const shouldWrap =
     normalizedText.includes("\n") ||
@@ -195,18 +198,20 @@ function isPositionedTextShape(record: TLRecord): record is TextShapeRecord {
 }
 
 function estimatedTextHeight(record: TextShapeRecord) {
-  const richText = record.props.richText;
+  return estimateTextShapePropsHeight(record.props);
+}
+
+export function estimateTextShapePropsHeight(props: Record<string, unknown>) {
+  const richText = props.richText;
   const width =
-    typeof record.props.w === "number"
-      ? record.props.w
-      : DEFAULT_ASSISTANT_TEXT_WIDTH;
+    typeof props.w === "number" ? props.w : DEFAULT_ASSISTANT_TEXT_WIDTH;
   const lineHeight =
     {
       s: 26,
       m: 32,
       l: 40,
       xl: 52,
-    }[String(record.props.size)] ?? 32;
+    }[String(props.size)] ?? 32;
   const charactersPerLine = Math.max(24, Math.floor(width / 10));
 
   if (!isObject(richText) || !Array.isArray(richText.content)) {

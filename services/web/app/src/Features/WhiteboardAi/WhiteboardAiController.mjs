@@ -48,6 +48,7 @@ async function updateSettings(req, res) {
     sessionId: req.params.session_id,
     linkedDocId: req.body.linkedDocId || null,
     mode: req.body.mode,
+    writingStyle: req.body.writingStyle,
   });
   res.json({ session: formatSession(session) });
 }
@@ -72,6 +73,7 @@ async function propose(req, res) {
     scene: req.body.scene,
     image: req.body.image || null,
     mode: req.body.mode,
+    writingStyle: req.body.writingStyle,
     linkedDocId: req.body.linkedDocId || null,
     fileReferences: req.body.fileReferences || [],
   });
@@ -131,6 +133,7 @@ function formatSessionSummary(session) {
     boardId: String(session.boardId),
     linkedDocId: session.linkedDocId ? String(session.linkedDocId) : null,
     mode: session.mode,
+    writingStyle: session.writingStyle || "standard",
     messageCount: session.messages.length,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,

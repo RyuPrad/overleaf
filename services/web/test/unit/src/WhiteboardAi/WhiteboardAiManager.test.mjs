@@ -64,7 +64,11 @@ describe("WhiteboardAiManager", function () {
 
   it("creates a new session with the selected session settings", async function (ctx) {
     ctx.WhiteboardAiThread.findOne.mockReturnValue(
-      query({ mode: "direct", linkedDocId: "bbbbbbbbbbbbbbbbbbbbbbbb" }),
+      query({
+        mode: "direct",
+        writingStyle: "pen",
+        linkedDocId: "bbbbbbbbbbbbbbbbbbbbbbbb",
+      }),
     );
     ctx.WhiteboardAiThread.create.mockImplementation(async (value) => value);
 
@@ -74,7 +78,11 @@ describe("WhiteboardAiManager", function () {
       inheritFromSessionId: sessionId,
     });
 
-    expect(created).to.include({ title: "New chat", mode: "direct" });
+    expect(created).to.include({
+      title: "New chat",
+      mode: "direct",
+      writingStyle: "pen",
+    });
     expect(created.linkedDocId).to.equal("bbbbbbbbbbbbbbbbbbbbbbbb");
   });
 
@@ -239,6 +247,192 @@ describe("WhiteboardAiManager", function () {
       }),
     ).to.be.rejectedWith("A referenced project file was not found");
   });
+
+  it("renders handwritten text and mathematics using the requested board style", async function (ctx) {
+    const thread = {
+      _id: sessionId,
+      mode: "suggest",
+      writingStyle: "handwritten",
+      linkedDocId: null,
+      titleIsCustom: false,
+      messages: [],
+    };
+    mockProposalPersistence(ctx, thread, thread);
+    const fetch = mockSidecar(ctx, {
+      boardActions: [
+        {
+          type: "add",
+          shape: {
+            id: "working",
+            type: "ink",
+            x: 120,
+            y: 80,
+            width: 640,
+            height: 60,
+            autoSize: false,
+            props: {
+              source: "Question 13",
+              format: "text",
+              w: 640,
+              h: 55,
+              size: "m",
+              color: "#172033",
+            },
+          },
+        },
+        {
+          type: "add",
+          shape: {
+            type: "latex",
+            x: 120,
+            y: 220,
+            width: 700,
+            height: 96,
+            latex: "\\frac{x-2}{x-3} \\leq \\frac{2x+5}{9x-7}",
+            color: "blue",
+          },
+        },
+        {
+          type: "add",
+          shape: {
+            type: "ink",
+            x: 120,
+            y: 360,
+            props: {
+              source: "Sign chart\nInterval:    x < 0    x > 0",
+              format: "text",
+              w: 700,
+              h: 120,
+              size: "m",
+              color: "#172033",
+            },
+          },
+        },
+      ],
+    });
+
+    await ctx.Manager.propose({
+      projectId: "project",
+      boardId: "board",
+      sessionId,
+      userId: "user",
+      prompt: "Write the solution like a student",
+      scene: [],
+      image: null,
+      mode: "suggest",
+      writingStyle: "handwritten",
+      linkedDocId: null,
+    });
+
+    const body = JSON.parse(fetch.mock.calls[0][1].body);
+    expect(body.messages[0].content).to.contain("\\boxed{...}");
+    expect(body.messages[0].content).to.contain("six to twelve");
+    expect(body.messages[0].content).to.match(/never return camera\s+actions/);
+    expect(body.messages[0].content).to.match(/Keep prose in text shapes/);
+    expect(JSON.parse(body.messages[1].content).writingStyle).to.equal(
+      "handwritten",
+    );
+    const actions =
+      ctx.WhiteboardAiTransaction.create.mock.calls[0][0][0].boardActions;
+    expect(actions[0].shape.type).to.equal("text");
+    expect(actions[0].shape.props).to.include({
+      text: "Question 13",
+      w: 640,
+      autoSize: false,
+      font: "draw",
+      color: "black",
+    });
+    expect(actions[0].shape.props).not.to.have.property("h");
+    expect(actions[1].shape).to.deep.include({
+      type: "ink",
+      props: {
+        source: "\\frac{x-2}{x-3} \\leq \\frac{2x+5}{9x-7}",
+        format: "latex",
+        w: 700,
+        h: 96,
+        size: "m",
+        color: "#2563eb",
+      },
+    });
+    expect(actions[1].shape.id).to.match(/^ai_ink_[\w_]+$/);
+    expect(actions[2].shape.type).to.equal("ink");
+    expect(actions[2].shape.props).to.include({
+      source: "Sign chart\nInterval:    x < 0    x > 0",
+      format: "text",
+      w: 700,
+      size: "m",
+      color: "#172033",
+    });
+  });
+
+  it("converts words as well as math to ink in pen-strokes mode", async function (ctx) {
+    const thread = {
+      _id: sessionId,
+      mode: "direct",
+      writingStyle: "pen",
+      linkedDocId: null,
+      titleIsCustom: true,
+      messages: [],
+    };
+    mockProposalPersistence(ctx, thread, thread);
+    mockSidecar(ctx, {
+      boardActions: [
+        {
+          type: "camera",
+          x: null,
+          y: "automatic",
+          zoom: 0,
+        },
+        {
+          type: "add",
+          shape: {
+            type: "text",
+            x: 40,
+            y: 40,
+            text: "Therefore x is between 7/9 and 3.",
+            width: 500,
+          },
+        },
+      ],
+    });
+
+    await ctx.Manager.propose({
+      projectId: "project",
+      boardId: "board",
+      sessionId,
+      userId: "user",
+      prompt: "Write on the board",
+      scene: [],
+      image: null,
+      mode: "direct",
+      writingStyle: "pen",
+      linkedDocId: null,
+    });
+
+    const actions =
+      ctx.WhiteboardAiTransaction.create.mock.calls[0][0][0].boardActions;
+    expect(actions).to.have.length(1);
+    const [action] = actions;
+    expect(action.shape.type).to.equal("ink");
+    expect(action.shape.props).to.include({
+      source: "Therefore x is between 7/9 and 3.",
+      format: "text",
+      color: "#172033",
+    });
+  });
+
+  it("rejects an unknown writing style", async function (ctx) {
+    await expect(
+      ctx.Manager.updateSessionSettings({
+        projectId: "project",
+        boardId: "board",
+        sessionId,
+        linkedDocId: null,
+        mode: "suggest",
+        writingStyle: "scribble",
+      }),
+    ).to.be.rejectedWith("Writing style must be standard, handwritten, or pen");
+  });
 });
 
 function mockProposalPersistence(ctx, thread, updated) {
@@ -254,7 +448,7 @@ function mockProposalPersistence(ctx, thread, updated) {
   ]);
 }
 
-function mockSidecar(ctx) {
+function mockSidecar(ctx, proposal = {}) {
   const fetch = vi.fn().mockResolvedValue({
     ok: true,
     json: vi.fn().mockResolvedValue({
@@ -270,6 +464,7 @@ function mockSidecar(ctx) {
                     explanation: "Done",
                     boardActions: [],
                     texEdits: [],
+                    ...proposal,
                   }),
                 },
               },

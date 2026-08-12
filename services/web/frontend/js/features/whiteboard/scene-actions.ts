@@ -1,19 +1,26 @@
 import {
+  Box,
   Editor,
+  TLRecord,
   TLShape,
   TLShapeId,
   TLShapePartial,
   TLUnknownShape,
   createShapeId,
+  isShape,
 } from "tldraw";
+import { normalizeInkShapeProps } from "./ink-rendering";
 import { normalizeTextShapeProps } from "./text-shape-normalization";
+import { WritingBounds, normalizeWritingLayout } from "./writing-layout";
+
+export { normalizeWritingLayout } from "./writing-layout";
 
 export type WhiteboardSceneAction =
   | {
       type: "create";
       shape: {
         id?: string;
-        type: "geo" | "text" | "arrow" | "latex" | "plot";
+        type: "geo" | "text" | "arrow" | "latex" | "plot" | "ink";
         x: number;
         y: number;
         props: Record<string, unknown>;
@@ -45,7 +52,14 @@ export type WhiteboardSceneAction =
   | { type: "camera"; x: number; y: number; zoom: number };
 
 const MAX_ACTIONS = 200;
-const ALLOWED_SHAPES = new Set(["geo", "text", "arrow", "latex", "plot"]);
+const ALLOWED_SHAPES = new Set([
+  "geo",
+  "text",
+  "arrow",
+  "latex",
+  "plot",
+  "ink",
+]);
 
 export function validateSceneActions(value: unknown): WhiteboardSceneAction[] {
   if (!Array.isArray(value) || value.length > MAX_ACTIONS) {
@@ -132,7 +146,10 @@ export function applySceneActions(
   untrustedActions: unknown,
   options: { historyMark?: string } = {},
 ) {
-  const actions = validateSceneActions(untrustedActions);
+  const actions = normalizeWritingLayout(
+    validateSceneActions(untrustedActions),
+    currentPageBounds(editor),
+  );
   editor.markHistoryStoppingPoint(
     options.historyMark ?? "AI whiteboard change",
   );
@@ -152,7 +169,13 @@ export function applySceneActions(
             ? {}
             : { rotation: action.rotation }),
           ...(action.props
-            ? { props: normalizeProps(existing.type, action.props) }
+            ? {
+                props: normalizeProps(
+                  existing.type,
+                  action.props,
+                  existing.props as Record<string, unknown>,
+                ),
+              }
             : {}),
         } as TLShapePartial<TLUnknownShape>,
       ]);
@@ -169,6 +192,28 @@ export function applySceneActions(
     }
   }
   return actions;
+}
+
+export function focusSceneRecords(
+  editor: Editor,
+  records: Array<TLRecord | null>,
+) {
+  const bounds = records.flatMap((record) => {
+    if (!record || !isShape(record) || !editor.getShape(record.id)) return [];
+    const pageBounds = editor.getShapePageBounds(record.id);
+    return pageBounds ? [pageBounds] : [];
+  });
+  if (bounds.length === 0) return false;
+
+  editor.selectNone();
+  editor.zoomToBounds(Box.Common(bounds).expandBy(24), {
+    // Leave room for tldraw's bottom toolbar so the last line of a worked
+    // solution remains visible after the assistant focuses the result.
+    inset: 148,
+    targetZoom: 1,
+    animation: { duration: 220 },
+  });
+  return true;
 }
 
 export function serializeScene(editor: Editor) {
@@ -212,8 +257,23 @@ function toShapePartial(
   } as TLShapePartial<TLUnknownShape>;
 }
 
-function normalizeProps(type: string, props: Record<string, unknown>) {
-  return type === "text" ? normalizeTextShapeProps(props) : props;
+function normalizeProps(
+  type: string,
+  props: Record<string, unknown>,
+  previous: Record<string, unknown> = {},
+) {
+  if (type === "text") return normalizeTextShapeProps(props);
+  if (type === "ink") return normalizeInkShapeProps(props, previous);
+  return props;
+}
+
+function currentPageBounds(editor: Editor): WritingBounds[] {
+  return editor.getCurrentPageShapes().flatMap((shape) => {
+    const bounds = editor.getShapePageBounds(shape);
+    return bounds
+      ? [{ x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h }]
+      : [];
+  });
 }
 
 function getShape(editor: Editor, id: string): TLShape {

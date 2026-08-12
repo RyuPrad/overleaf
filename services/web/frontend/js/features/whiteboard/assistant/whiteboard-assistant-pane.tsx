@@ -58,12 +58,15 @@ type AssistantTransaction = {
   createdAt: string;
 };
 
+type WritingStyle = "standard" | "handwritten" | "pen";
+
 type AssistantSessionSummary = {
   id: string;
   title: string;
   boardId: string;
   linkedDocId: string | null;
   mode: "direct" | "suggest";
+  writingStyle: WritingStyle;
   messageCount: number;
   createdAt: string;
   updatedAt: string;
@@ -88,6 +91,7 @@ export default function WhiteboardAssistantPane() {
     apply,
     preview,
     clearPreview,
+    focus,
     exportTikz,
     importTikz,
     canUndo,
@@ -97,6 +101,7 @@ export default function WhiteboardAssistantPane() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [state, setState] = useState<AssistantState | null>(null);
   const [mode, setMode] = useState<"direct" | "suggest">("suggest");
+  const [writingStyle, setWritingStyle] = useState<WritingStyle>("standard");
   const [linkedDocId, setLinkedDocId] = useState("");
   const [prompt, setPrompt] = useState("");
   const [fileReferences, setFileReferences] = useState<
@@ -146,6 +151,7 @@ export default function WhiteboardAssistantPane() {
   const selectSessionState = useCallback((next: AssistantState) => {
     setState(next);
     setMode(next.session.mode);
+    setWritingStyle(next.session.writingStyle ?? "standard");
     setLinkedDocId(next.session.linkedDocId ?? "");
   }, []);
 
@@ -405,7 +411,11 @@ export default function WhiteboardAssistantPane() {
   ]);
 
   const saveSettings = useCallback(
-    async (nextMode: "direct" | "suggest", nextLinkedDocId: string) => {
+    async (
+      nextMode: "direct" | "suggest",
+      nextLinkedDocId: string,
+      nextWritingStyle: WritingStyle,
+    ) => {
       if (!sessionPath || !write) return;
       const response = await putJSON<{ session: AssistantSession }>(
         `${sessionPath}/settings`,
@@ -413,6 +423,7 @@ export default function WhiteboardAssistantPane() {
           body: {
             mode: nextMode,
             linkedDocId: nextLinkedDocId || null,
+            writingStyle: nextWritingStyle,
           },
         },
       );
@@ -436,9 +447,10 @@ export default function WhiteboardAssistantPane() {
         undo(patch, transaction.id);
         throw cause;
       }
+      focus(patch);
       await loadSession();
     },
-    [apply, loadSession, sessionPath, undo, write],
+    [apply, focus, loadSession, sessionPath, undo, write],
   );
 
   const submit = useCallback(
@@ -461,6 +473,7 @@ export default function WhiteboardAssistantPane() {
                 ? snapshot.image
                 : null,
             mode,
+            writingStyle,
             linkedDocId: linkedDocId || null,
             fileReferences: fileReferences.map(({ id, kind }) => ({
               id,
@@ -497,6 +510,7 @@ export default function WhiteboardAssistantPane() {
       selectSessionState,
       sessionPath,
       state,
+      writingStyle,
       write,
     ],
   );
@@ -731,7 +745,7 @@ export default function WhiteboardAssistantPane() {
           onChange={(event) => {
             const next = event.target.value as "direct" | "suggest";
             setMode(next);
-            saveSettings(next, linkedDocId).catch((cause) =>
+            saveSettings(next, linkedDocId, writingStyle).catch((cause) =>
               setError(errorMessage(cause)),
             );
           }}
@@ -739,6 +753,30 @@ export default function WhiteboardAssistantPane() {
           <option value="suggest">Suggest</option>
           <option value="direct">Direct</option>
         </select>
+        <label className="form-label" htmlFor="whiteboard-ai-writing-style">
+          Board writing
+        </label>
+        <select
+          id="whiteboard-ai-writing-style"
+          className="form-select form-select-sm mb-3"
+          value={writingStyle}
+          disabled={!state || busy || !write}
+          onChange={(event) => {
+            const next = event.target.value as WritingStyle;
+            setWritingStyle(next);
+            saveSettings(mode, linkedDocId, next).catch((cause) =>
+              setError(errorMessage(cause)),
+            );
+          }}
+        >
+          <option value="standard">Standard</option>
+          <option value="handwritten">Handwritten</option>
+          <option value="pen">Pen strokes</option>
+        </select>
+        <div className="form-text mb-3">
+          Handwritten keeps words editable and draws math as ink. Pen strokes
+          draw both words and math as movable ink.
+        </div>
         <label className="form-label" htmlFor="whiteboard-ai-linked-doc">
           Linked writable TeX file
         </label>
@@ -750,7 +788,7 @@ export default function WhiteboardAssistantPane() {
           onChange={(event) => {
             const next = event.target.value;
             setLinkedDocId(next);
-            saveSettings(mode, next).catch((cause) =>
+            saveSettings(mode, next, writingStyle).catch((cause) =>
               setError(errorMessage(cause)),
             );
           }}
@@ -1032,6 +1070,7 @@ function summaryFromSession(
     boardId: session.boardId,
     linkedDocId: session.linkedDocId,
     mode: session.mode,
+    writingStyle: session.writingStyle ?? "standard",
     messageCount: session.messages.length,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,

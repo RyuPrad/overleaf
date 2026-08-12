@@ -24,6 +24,7 @@ type BoardHandle = {
   ) => WhiteboardRecordPatch[];
   preview: (actions: WhiteboardSceneAction[], transactionId: string) => void;
   clearPreview: () => void;
+  focus: (patch: WhiteboardRecordPatch[]) => void;
   exportTikz: () => string;
   importTikz: (source: string) => string[];
   canUndo: (patch: WhiteboardRecordPatch[]) => void;
@@ -50,6 +51,7 @@ type WhiteboardEditorContextValue = {
   ) => WhiteboardRecordPatch[];
   preview: (actions: WhiteboardSceneAction[], transactionId: string) => void;
   clearPreview: () => void;
+  focus: (patch: WhiteboardRecordPatch[]) => void;
   exportTikz: () => string;
   importTikz: (source: string) => string[];
   canUndo: (patch: WhiteboardRecordPatch[]) => void;
@@ -101,6 +103,14 @@ export const WhiteboardEditorProvider: FC<PropsWithChildren> = ({
     handle?.clearPreview();
   }, [handle]);
 
+  const focus = useCallback(
+    (patch: WhiteboardRecordPatch[]) => {
+      if (!handle) throw new Error("The target whiteboard is no longer open");
+      handle.focus(patch);
+    },
+    [handle],
+  );
+
   const exportTikz = useCallback(() => {
     if (!handle) throw new Error("Open a whiteboard before exporting TikZ");
     return handle.exportTikz();
@@ -138,6 +148,7 @@ export const WhiteboardEditorProvider: FC<PropsWithChildren> = ({
       apply,
       preview,
       clearPreview,
+      focus,
       exportTikz,
       importTikz,
       canUndo,
@@ -149,6 +160,7 @@ export const WhiteboardEditorProvider: FC<PropsWithChildren> = ({
       capture,
       clearPreview,
       exportTikz,
+      focus,
       handle?.boardId,
       importTikz,
       preview,

@@ -21,6 +21,7 @@ import {
   shouldCompactWhiteboard,
 } from '@/features/whiteboard/persistence'
 import { WHITEBOARD_SHAPE_UTILS } from '@/features/whiteboard/shapes'
+import { focusSceneRecords } from '@/features/whiteboard/scene-actions'
 import {
   applySceneActions,
   useWhiteboardEditor,
@@ -141,8 +142,18 @@ export default function TldrawEditor() {
         )
         previewPatch.current = createRecordPatch(before, after)
         setPreviewTransactionId(transactionId)
+        focusSceneRecords(
+          editor,
+          previewPatch.current.map(entry => entry.after)
+        )
       },
       clearPreview,
+      focus(patch) {
+        focusSceneRecords(
+          editor,
+          patch.map(entry => entry.after)
+        )
+      },
       exportTikz() {
         clearPreview()
         return exportWhiteboardToTikz({
