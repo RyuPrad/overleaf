@@ -73,6 +73,7 @@ async function propose(req, res) {
     image: req.body.image || null,
     mode: req.body.mode,
     linkedDocId: req.body.linkedDocId || null,
+    fileReferences: req.body.fileReferences || [],
   });
   res.json({
     session: formatSession(result.session),

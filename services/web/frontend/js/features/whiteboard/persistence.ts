@@ -11,6 +11,7 @@ import {
   defaultShapeUtils,
 } from "tldraw";
 import { WHITEBOARD_SHAPE_UTILS } from "./shapes";
+import { repairLegacyAssistantTextRecords } from "./text-shape-normalization";
 
 export const TLDRAW_DIFF_FORMAT = "overleaf-tldraw-diff";
 export const TLDRAW_SNAPSHOT_FORMAT = "overleaf-tldraw-snapshot";
@@ -180,11 +181,18 @@ function replaceDocumentRecords(store: TLStore, records: TLRecord[]) {
     store.serialize("document"),
   ) as TLRecord["id"][];
   if (existingIds.length > 0) store.remove(existingIds);
-  store.put(records.length > 0 ? records : createInitialRecords());
+  store.put(
+    records.length > 0
+      ? repairLegacyAssistantTextRecords(records)
+      : createInitialRecords(),
+  );
 }
 
 function putPersistedDiff(store: TLStore, diff: PersistedTldrawDiff) {
-  const records = [...diff.added, ...diff.updated];
+  const records = repairLegacyAssistantTextRecords([
+    ...diff.added,
+    ...diff.updated,
+  ]);
   if (records.length > 0) store.put(records);
   if (diff.removed.length > 0) {
     store.remove(diff.removed as TLRecord["id"][]);

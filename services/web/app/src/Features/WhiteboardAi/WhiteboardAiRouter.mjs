@@ -1,6 +1,7 @@
 import { RateLimiter } from "../../infrastructure/RateLimiter.mjs";
 import RateLimiterMiddleware from "../Security/RateLimiterMiddleware.mjs";
 import AuthorizationMiddleware from "../Authorization/AuthorizationMiddleware.mjs";
+import HttpErrorHandler from "../Errors/HttpErrorHandler.mjs";
 import WhiteboardAiController from "./WhiteboardAiController.mjs";
 
 const proposeRateLimiter = new RateLimiter("whiteboard-ai-propose", {
@@ -61,6 +62,12 @@ function apply(webRouter) {
       controller,
     );
   }
+  webRouter.use(base, handleWhiteboardAiError);
+}
+
+function handleWhiteboardAiError(error, req, res, next) {
+  if (!Number.isInteger(error?.statusCode)) return next(error);
+  HttpErrorHandler.handleErrorByStatusCode(req, res, error, error.statusCode);
 }
 
 export default { apply };

@@ -5,8 +5,8 @@ import {
   TLShapePartial,
   TLUnknownShape,
   createShapeId,
-  toRichText,
 } from "tldraw";
+import { normalizeTextShapeProps } from "./text-shape-normalization";
 
 export type WhiteboardSceneAction =
   | {
@@ -213,9 +213,7 @@ function toShapePartial(
 }
 
 function normalizeProps(type: string, props: Record<string, unknown>) {
-  if (type !== "text" || typeof props.text !== "string") return props;
-  const { text, ...rest } = props;
-  return { ...rest, richText: toRichText(text) };
+  return type === "text" ? normalizeTextShapeProps(props) : props;
 }
 
 function getShape(editor: Editor, id: string): TLShape {

@@ -85,6 +85,25 @@ chat title; use the chat menu to rename or delete it. The selected chat is
 remembered separately for each project and whiteboard in the current browser.
 Chat histories are shared with project collaborators who can read the board.
 
+To refer to a project file in a prompt, type `@` in the message box. Continue
+typing to filter by filename or folder path, then choose a result with the mouse
+or with **Up/Down** and **Enter/Tab**. **Escape** closes the picker. Chosen files
+appear above the message as removable chips, and up to 20 files can be included
+in one request. Editable project documents send their current text as prioritized
+read-only context. Uploaded files such as images and PDFs can also be selected,
+but currently contribute their project path and metadata only. An `@` reference
+does not make a file writable; only the separately selected linked `.tex` file
+can be edited by an Assistant transaction.
+
+Assistant-created worked solutions are normalized before they reach tldraw.
+Visible escaped line-break tokens are converted into real rich-text paragraphs,
+and long or multiline text receives a bounded width instead of expanding into an
+unreadable single line. During document replay, the compatibility path also
+recognizes the narrow auto-sized records produced by the earlier bug, repairs
+their paragraphs, and spaces consecutive blocks vertically. Reopening an
+affected board is enough to display the repaired layout; the original document
+history is not destructively rewritten.
+
 The Assistant reuses the authenticated ChatGPT-Web session maintained by the
 custom OpenCode installation. Authentication is mounted read-only into the
 Overleaf sidecar, while Overleaf keeps its own conversation map under the
@@ -358,7 +377,13 @@ Additional implementation areas:
 - `services/web/frontend/js/features/whiteboard/` — persistence, custom shapes,
   safe math parsing, TikZ, scene actions, Assistant UI, and the active-board bridge.
 - `services/web/app/src/Features/WhiteboardAi/` — authenticated multi-session,
-  proposal, commit, reject, delete, rename, and undo APIs.
+  proposal, explicit file-reference context, commit, reject, delete, rename,
+  and undo APIs, with scoped JSON 4xx handling for validation and conflicts.
+- `services/web/frontend/js/features/whiteboard/assistant/file-mentions.ts` —
+  project-file flattening, `@` query detection, filtering, and mention insertion.
+- `services/web/frontend/js/features/whiteboard/text-shape-normalization.ts` —
+  readable Assistant text widths, escaped-line-break conversion, and narrowly
+  scoped replay/reflow compatibility for malformed legacy Assistant shapes.
 - `services/chatgpt-web/` — isolated browser-session sidecar runtime.
 - `/root/overleaf-toolkit/doc/whiteboard-ai.md` — deployment and shared-auth guide.
 
@@ -406,8 +431,9 @@ reconstructs the document by:
 1. Creating the required tldraw document and default page records.
 2. Parsing each non-empty line.
 3. Validating the format/version.
-4. Applying added and updated records.
-5. Removing deleted record IDs.
+4. Normalizing only recognized malformed legacy Assistant text records.
+5. Applying added and updated records.
+6. Removing deleted record IDs.
 
 This format maps naturally onto Overleaf text operations and realtime collaboration while bounded compaction prevents indefinite append-only growth.
 
@@ -527,6 +553,14 @@ The following was verified against the running local instance:
   200/201 for list, create, get, rename, and delete operations.
 - Two live Assistant sessions receive distinct ChatGPT conversation URLs; a
   follow-up reuses the selected session's URL and retains its earlier context.
+- The Assistant composer offers an accessible, keyboard-navigable project-file
+  picker after `@`; selected editable documents are prioritized as read-only AI
+  context and uploaded files are identified without claiming their contents were
+  inspected.
+- The previously applied Question 13 transaction with 15 literal `\n` tokens
+  replays as three bounded multiline text blocks. Browser geometry checks report
+  positive gaps between every block, and the rendered board has no console
+  errors.
 - Session-to-conversation mappings survive a sidecar restart, and local deletion
   forgets only the selected mapping and its local MongoDB history.
 - Common TikZ import renders a safe function plot and a structured LaTeX shape;
@@ -534,6 +568,7 @@ The following was verified against the running local instance:
 - Imported shapes survive a browser reload, and their cleanup survives another
   reload.
 - Focused safe-math and TikZ tests pass (6 tests).
+- Focused Assistant text normalization/reflow tests pass (5 tests).
 - `git diff --check` passed before commit.
 
 Live AI proposal generation uses the existing custom OpenCode ChatGPT-Web

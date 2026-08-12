@@ -28,7 +28,10 @@ describe("WhiteboardAiManager", function () {
       deleteMany: vi.fn(),
     };
     ctx.ProjectEntityHandler = {
-      promises: { getAllDocs: vi.fn().mockResolvedValue({}) },
+      promises: {
+        getAllDocs: vi.fn().mockResolvedValue({}),
+        getAllFiles: vi.fn().mockResolvedValue({}),
+      },
     };
     ctx.DocumentUpdaterHandler = {
       promises: { setDocument: vi.fn() },
@@ -142,6 +145,99 @@ describe("WhiteboardAiManager", function () {
     expect(
       ctx.WhiteboardAiThread.findOneAndUpdate.mock.calls[1][1].$set,
     ).not.to.have.property("title");
+  });
+
+  it("prioritizes explicitly mentioned documents and identifies uploaded files", async function (ctx) {
+    const thread = {
+      _id: sessionId,
+      mode: "suggest",
+      linkedDocId: null,
+      titleIsCustom: false,
+      messages: [],
+    };
+    mockProposalPersistence(ctx, thread, thread);
+    ctx.ProjectEntityHandler.promises.getAllDocs.mockResolvedValue({
+      "chapters/methods.tex": {
+        _id: "bbbbbbbbbbbbbbbbbbbbbbbb",
+        lines: ["Explicit methods content"],
+      },
+      "main.tex": {
+        _id: "dddddddddddddddddddddddd",
+        lines: ["General project content"],
+      },
+    });
+    ctx.ProjectEntityHandler.promises.getAllFiles.mockResolvedValue({
+      "figures/result.png": {
+        _id: "eeeeeeeeeeeeeeeeeeeeeeee",
+        hash: "hash",
+      },
+    });
+    const fetch = mockSidecar(ctx);
+
+    await ctx.Manager.propose({
+      projectId: "project",
+      boardId: "board",
+      sessionId,
+      userId: "user",
+      prompt: "Use the mentioned sources",
+      scene: [],
+      image: null,
+      mode: "suggest",
+      linkedDocId: null,
+      fileReferences: [
+        { id: "bbbbbbbbbbbbbbbbbbbbbbbb", kind: "doc" },
+        { id: "eeeeeeeeeeeeeeeeeeeeeeee", kind: "file" },
+      ],
+    });
+
+    const body = JSON.parse(fetch.mock.calls[0][1].body);
+    const content = JSON.parse(body.messages[1].content);
+    expect(content.referencedFiles).to.deep.equal([
+      {
+        path: "chapters/methods.tex",
+        content: "Explicit methods content",
+        access: "read-only",
+      },
+      {
+        path: "figures/result.png",
+        access: "read-only",
+        contentAvailable: false,
+        note: "Uploaded project file; path and metadata only",
+      },
+    ]);
+    expect(content.projectContext).to.deep.equal([
+      {
+        path: "main.tex",
+        content: "General project content",
+        access: "read-only",
+      },
+    ]);
+  });
+
+  it("rejects references that are not part of the project", async function (ctx) {
+    const thread = {
+      _id: sessionId,
+      mode: "suggest",
+      linkedDocId: null,
+      titleIsCustom: false,
+      messages: [],
+    };
+    ctx.WhiteboardAiThread.findOneAndUpdate.mockReturnValue(query(thread));
+
+    await expect(
+      ctx.Manager.propose({
+        projectId: "project",
+        boardId: "board",
+        sessionId,
+        userId: "user",
+        prompt: "Use a missing file",
+        scene: [],
+        image: null,
+        mode: "suggest",
+        linkedDocId: null,
+        fileReferences: [{ id: "ffffffffffffffffffffffff", kind: "doc" }],
+      }),
+    ).to.be.rejectedWith("A referenced project file was not found");
   });
 });
 

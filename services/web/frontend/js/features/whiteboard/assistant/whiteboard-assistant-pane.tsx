@@ -1,6 +1,7 @@
 import {
   ChangeEvent,
   FormEvent,
+  KeyboardEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -23,6 +24,16 @@ import { useWhiteboardEditor } from "../whiteboard-editor-context";
 import { WhiteboardSceneAction } from "../scene-actions";
 import { WhiteboardRecordPatch } from "../whiteboard-editor-context";
 import { activeSessionStorageKey, selectSessionId } from "./session-selection";
+import {
+  ActiveFileMention,
+  fileMentionToken,
+  filterMentionableFiles,
+  findActiveFileMention,
+  insertFileMention,
+  MAX_FILE_MENTIONS,
+  MentionableProjectFile,
+  mentionableFilesInFolder,
+} from "./file-mentions";
 
 type AssistantMessage = {
   id: string;
@@ -70,7 +81,7 @@ type AssistantState = {
 export default function WhiteboardAssistantPane() {
   const { projectId } = useProjectContext();
   const { write } = usePermissionsContext();
-  const { docs } = useFileTreeData();
+  const { docs, fileTreeData } = useFileTreeData();
   const {
     activeBoardId,
     capture,
@@ -88,14 +99,37 @@ export default function WhiteboardAssistantPane() {
   const [mode, setMode] = useState<"direct" | "suggest">("suggest");
   const [linkedDocId, setLinkedDocId] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [fileReferences, setFileReferences] = useState<
+    MentionableProjectFile[]
+  >([]);
+  const [activeMention, setActiveMention] = useState<ActiveFileMention | null>(
+    null,
+  );
+  const [activeMentionIndex, setActiveMentionIndex] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const loadSequence = useRef(0);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
 
   const texDocs = useMemo(
     () =>
       docs?.filter((item) => item.path.toLowerCase().endsWith(".tex")) ?? [],
     [docs],
+  );
+  const mentionableFiles = useMemo(
+    () => mentionableFilesInFolder(fileTreeData),
+    [fileTreeData],
+  );
+  const mentionMatches = useMemo(
+    () =>
+      activeMention && fileReferences.length < MAX_FILE_MENTIONS
+        ? filterMentionableFiles(
+            mentionableFiles,
+            activeMention.query,
+            fileReferences,
+          )
+        : [],
+    [activeMention, fileReferences, mentionableFiles],
   );
 
   const basePath = activeBoardId
@@ -239,6 +273,9 @@ export default function WhiteboardAssistantPane() {
     setState(null);
     setSessions([]);
     setActiveSessionId(null);
+    setPrompt("");
+    setFileReferences([]);
+    setActiveMention(null);
     loadBoard().catch((cause) => setError(errorMessage(cause)));
     return () => {
       loadSequence.current += 1;
@@ -253,6 +290,9 @@ export default function WhiteboardAssistantPane() {
       clearPreview();
       setState(null);
       setActiveSessionId(sessionId);
+      setPrompt("");
+      setFileReferences([]);
+      setActiveMention(null);
       rememberSelection(sessionId);
       try {
         await loadSession(sessionId);
@@ -286,6 +326,8 @@ export default function WhiteboardAssistantPane() {
       selectSessionState({ session: response.session, transactions: [] });
       mergeSessionSummary(response.session);
       setPrompt("");
+      setFileReferences([]);
+      setActiveMention(null);
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -420,9 +462,15 @@ export default function WhiteboardAssistantPane() {
                 : null,
             mode,
             linkedDocId: linkedDocId || null,
+            fileReferences: fileReferences.map(({ id, kind }) => ({
+              id,
+              kind,
+            })),
           },
         });
         setPrompt("");
+        setFileReferences([]);
+        setActiveMention(null);
         selectSessionState({
           session: response.session,
           transactions: [response.transaction, ...(state?.transactions ?? [])],
@@ -441,6 +489,7 @@ export default function WhiteboardAssistantPane() {
       applyTransaction,
       busy,
       capture,
+      fileReferences,
       linkedDocId,
       mergeSessionSummary,
       mode,
@@ -451,6 +500,79 @@ export default function WhiteboardAssistantPane() {
       write,
     ],
   );
+
+  const updatePrompt = useCallback((value: string, caret: number) => {
+    setPrompt(value);
+    setFileReferences((current) =>
+      current.filter((file) => value.includes(fileMentionToken(file.path))),
+    );
+    setActiveMention(findActiveFileMention(value, caret));
+    setActiveMentionIndex(0);
+  }, []);
+
+  const selectFileMention = useCallback(
+    (file: MentionableProjectFile) => {
+      if (!activeMention) return;
+      const insertion = insertFileMention(prompt, activeMention, file.path);
+      setPrompt(insertion.value);
+      setFileReferences((current) =>
+        current.some(
+          (selected) => selected.id === file.id && selected.kind === file.kind,
+        )
+          ? current
+          : [...current, file],
+      );
+      setActiveMention(null);
+      setActiveMentionIndex(0);
+      window.requestAnimationFrame(() => {
+        promptRef.current?.focus();
+        promptRef.current?.setSelectionRange(insertion.caret, insertion.caret);
+      });
+    },
+    [activeMention, prompt],
+  );
+
+  const handlePromptKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (!activeMention) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setActiveMention(null);
+        return;
+      }
+      if (mentionMatches.length === 0) return;
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const direction = event.key === "ArrowDown" ? 1 : -1;
+        setActiveMentionIndex(
+          (current) =>
+            (current + direction + mentionMatches.length) %
+            mentionMatches.length,
+        );
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        selectFileMention(
+          mentionMatches[
+            Math.min(activeMentionIndex, mentionMatches.length - 1)
+          ],
+        );
+      }
+    },
+    [activeMention, activeMentionIndex, mentionMatches, selectFileMention],
+  );
+
+  const removeFileReference = useCallback((file: MentionableProjectFile) => {
+    const token = fileMentionToken(file.path);
+    setPrompt((current) => current.replace(token, "").replace(/ {2,}/g, " "));
+    setFileReferences((current) =>
+      current.filter(
+        (selected) => selected.id !== file.id || selected.kind !== file.kind,
+      ),
+    );
+    setActiveMention(null);
+  }, []);
 
   const runTransactionAction = useCallback(
     async (
@@ -704,16 +826,119 @@ export default function WhiteboardAssistantPane() {
         <label className="visually-hidden" htmlFor="whiteboard-ai-prompt">
           Ask the whiteboard assistant
         </label>
-        <textarea
-          id="whiteboard-ai-prompt"
-          className="form-control mb-2"
-          rows={3}
-          maxLength={16000}
-          placeholder="Create, explain, plot, or update the linked TeX…"
-          value={prompt}
-          disabled={!state || busy || !write}
-          onChange={(event) => setPrompt(event.target.value)}
-        />
+        {fileReferences.length > 0 && (
+          <div
+            className="d-flex flex-wrap gap-1 mb-2"
+            aria-label="Referenced files"
+          >
+            {fileReferences.map((file) => (
+              <span
+                key={`${file.kind}:${file.id}`}
+                className="badge rounded-pill text-bg-light border d-inline-flex align-items-center gap-1"
+              >
+                <span className="text-truncate" style={{ maxWidth: "220px" }}>
+                  @{file.path}
+                </span>
+                <button
+                  type="button"
+                  className="btn-close"
+                  style={{ fontSize: "0.55rem" }}
+                  aria-label={`Stop referencing ${file.path}`}
+                  disabled={busy}
+                  onClick={() => removeFileReference(file)}
+                />
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="position-relative mb-2">
+          <textarea
+            ref={promptRef}
+            id="whiteboard-ai-prompt"
+            className="form-control"
+            rows={3}
+            maxLength={16000}
+            placeholder="Ask about the board, or type @ to reference a project file…"
+            value={prompt}
+            disabled={!state || busy || !write}
+            role="combobox"
+            aria-autocomplete="list"
+            aria-controls={
+              activeMention ? "whiteboard-ai-file-mentions" : undefined
+            }
+            aria-expanded={Boolean(activeMention)}
+            aria-activedescendant={
+              activeMention && mentionMatches.length > 0
+                ? `whiteboard-ai-file-mention-${activeMentionIndex}`
+                : undefined
+            }
+            onChange={(event) =>
+              updatePrompt(event.target.value, event.target.selectionStart)
+            }
+            onClick={(event) =>
+              setActiveMention(
+                findActiveFileMention(
+                  event.currentTarget.value,
+                  event.currentTarget.selectionStart,
+                ),
+              )
+            }
+            onKeyDown={handlePromptKeyDown}
+            onBlur={() => setActiveMention(null)}
+          />
+          {activeMention && (
+            <div
+              id="whiteboard-ai-file-mentions"
+              role="listbox"
+              aria-label="Project files"
+              className="list-group position-absolute start-0 end-0 bottom-100 mb-1 shadow bg-body overflow-auto"
+              style={{ maxHeight: "240px", zIndex: 1080 }}
+            >
+              <div className="list-group-item py-1 small text-muted">
+                {fileReferences.length >= MAX_FILE_MENTIONS
+                  ? `Maximum ${MAX_FILE_MENTIONS} referenced files`
+                  : activeMention.query
+                    ? `Files matching “${activeMention.query}”`
+                    : "Search project files"}
+              </div>
+              {fileReferences.length < MAX_FILE_MENTIONS &&
+                mentionMatches.map((file, index) => (
+                  <button
+                    id={`whiteboard-ai-file-mention-${index}`}
+                    key={`${file.kind}:${file.id}`}
+                    type="button"
+                    role="option"
+                    aria-selected={index === activeMentionIndex}
+                    className={`list-group-item list-group-item-action py-2 ${
+                      index === activeMentionIndex ? "active" : ""
+                    }`}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onMouseEnter={() => setActiveMentionIndex(index)}
+                    onClick={() => selectFileMention(file)}
+                  >
+                    <span className="d-block text-truncate">{file.path}</span>
+                    <span
+                      className={`d-block small ${
+                        index === activeMentionIndex
+                          ? "text-white-50"
+                          : "text-muted"
+                      }`}
+                    >
+                      {file.kind === "doc"
+                        ? "Text contents included"
+                        : "Uploaded file reference"}
+                    </span>
+                  </button>
+                ))}
+              {fileReferences.length < MAX_FILE_MENTIONS &&
+                mentionMatches.length === 0 && (
+                  <div className="list-group-item py-2 text-muted">
+                    No matching project files
+                  </div>
+                )}
+            </div>
+          )}
+        </div>
         <button
           type="submit"
           className="btn btn-primary btn-sm w-100"
